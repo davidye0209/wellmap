@@ -19,6 +19,7 @@ import {
 	Square,
 	ChevronDown,
 	ChevronUp,
+	FlaskConical,
 } from "lucide-react";
 
 /**
@@ -28,36 +29,36 @@ import {
  * This ensures high categorical distinction for multiplexed screening without compromising legibility.
  */
 const ACCESSIBLE_PALETTE = [
-	// Row 1
-	"#f99c35",
+	// Row 0 (Col 0: Reds, Col 1: Oranges/Yellows, Col 2: Greens/Teals, Col 3: Blues/Cyans, Col 4: Purples/Pinks)
 	"#f43f5e",
-	"#a3e635",
-	"#06b6d4",
-	"#fda4af",
-	// Row 2
-	"#3b82f6",
-	"#fbcfe8",
-	"#ffe3a8",
-	"#7389d8",
-	"#bfdbfe",
-	// Row 3
-	"#4ca1a3",
-	"#f472b6",
-	"#99f6e4",
-	"#e9d5ff",
-	"#56b4d3",
-	// Row 4
-	"#fb7185",
+	"#f99c35",
 	"#4ade80",
-	"#0d9488",
-	"#facc15",
-	"#60a5fa",
-	// Row 5
-	"#fecdd3",
+	"#3b82f6",
 	"#c084fc",
+	// Row 1
+	"#fb7185",
 	"#f59e0b",
+	"#a3e635",
+	"#60a5fa",
+	"#e9d5ff",
+	// Row 2
+	"#f472b6",
+	"#facc15",
+	"#0d9488",
+	"#06b6d4",
+	"#7389d8",
+	// Row 3
+	"#fda4af",
+	"#ffe3a8",
+	"#4ca1a3",
+	"#56b4d3",
+	"#bfdbfe",
+	// Row 4
+	"#fecdd3",
 	"#84cc16",
+	"#99f6e4",
 	"#bae6fd",
+	"#fbcfe8",
 ];
 
 const INITIAL_LAYERS = [
@@ -69,11 +70,7 @@ const INITIAL_LAYERS = [
 ];
 
 const INITIAL_LABELS = {
-	treatment: [
-		{ id: "t-dmso", name: "DMSO", color: "#7389d8" },
-		{ id: "t-1", name: "Drug 1", color: "#f99c35" },
-		{ id: "t-2", name: "Drug 2", color: "#f43f5e" },
-	],
+	treatment: [{ id: "t-dmso", name: "DMSO", color: "#7389d8" }],
 	dose: [
 		{
 			id: "d-10uM",
@@ -92,13 +89,10 @@ const INITIAL_LABELS = {
 		},
 	],
 	duration: [
-		{ id: "dur-1", name: "24 hours", color: "#bfdbfe" },
-		{ id: "dur-2", name: "48 hours", color: "#e9d5ff" },
+		{ id: "dur-1", name: "1d", color: "#bfdbfe" },
+		{ id: "dur-2", name: "2d", color: "#e9d5ff" },
 	],
-	biomarker: [
-		{ id: "b-1", name: "GFP Reporter", color: "#99f6e4" },
-		{ id: "b-2", name: "Ki-67 Assay", color: "#fbcfe8" },
-	],
+	biomarker: [],
 	status: [
 		{ id: "s-live", name: "Live", color: "#4ade80" },
 		{ id: "s-fixed", name: "Fixed", color: "#fda4af" },
@@ -193,7 +187,7 @@ const formatDoseDisplay = (valStr, unit, precision = 4) => {
 	}
 
 	const formattedVal = Number(currentVal.toFixed(precision)).toString();
-	return `${formattedVal}${currentUnit}`;
+	return `${formattedVal} ${currentUnit}`;
 };
 
 function hexToRgba(hex, alpha) {
@@ -206,43 +200,6 @@ function hexToRgba(hex, alpha) {
 
 const buildDefaultWells = () => {
 	const defaultWells = {};
-
-	// Well B2: Stain Lot (t-1)
-	defaultWells["B2"] = {
-		treatment: ["t-1"],
-		dose: "d-1uM",
-		duration: "dur-1",
-		biomarker: "b-1",
-		status: "s-live",
-	};
-
-	// Well C2: Stain (t-2)
-	defaultWells["C2"] = {
-		treatment: ["t-2"],
-		dose: "d-1uM",
-		duration: "dur-1",
-		biomarker: "b-1",
-		status: "s-live",
-	};
-
-	// Well D2: Stain (t-2)
-	defaultWells["D2"] = {
-		treatment: ["t-2"],
-		dose: "d-1uM",
-		duration: "dur-1",
-		biomarker: "b-1",
-		status: "s-live",
-	};
-
-	// Add a simple 384-well seed (Well J15: DMSO)
-	defaultWells["J15"] = {
-		treatment: ["t-dmso"],
-		dose: "d-10uM",
-		duration: "dur-2",
-		biomarker: "b-2",
-		status: "s-fixed",
-	};
-
 	return defaultWells;
 };
 
@@ -654,7 +611,7 @@ export default function App() {
 														.map((ov, idx) => (
 															<span
 																key={idx}
-																className="font-normal leading-none tracking-normal text-center truncate max-w-[95%] bg-transparent select-none"
+																className="font-normal leading-[1.1] tracking-normal text-center whitespace-normal break-words max-w-[90%] bg-transparent select-none"
 																style={{
 																	color: "#111827",
 																	fontSize:
@@ -961,15 +918,15 @@ export default function App() {
 	const [newLabelValue, setNewLabelValue] = useState("");
 	const [newLabelUnit, setNewLabelUnit] = useState("µM");
 
-	const [titrationDoseInput, setTitrationDoseInput] = useState("1nM");
+	const [titrationDoseInput, setTitrationDoseInput] = useState("");
 	const [isDoseSuggestionsOpen, setIsDoseSuggestionsOpen] = useState(false);
 	const doseSuggestionsRef = useRef<HTMLDivElement>(null);
 	const doseSuggestions = ["10uM", "1uM", "100nM", "10nM", "1nM", "100ng/ml"];
-	const [isSetDilution, setIsSetDilution] = useState(true);
+	const [isSetDilution, setIsSetDilution] = useState(false);
 	const [dilutionFactor, setDilutionFactor] = useState("3");
 	const [dilutionDirection, setDilutionDirection] = useState("Down");
 	const [replicatesCount, setReplicatesCount] = useState("1");
-	const [replicateDirection, setReplicateDirection] = useState("Down");
+	const [replicateDirection, setReplicateDirection] = useState("Right");
 
 	const [isAddingLayer, setIsAddingLayer] = useState(false);
 	const [newLayerName, setNewLayerName] = useState("");
@@ -1057,6 +1014,29 @@ export default function App() {
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, []);
+
+	useEffect(() => {
+		if (selectedWells.size === 0) return;
+
+		const selectedRows = new Set();
+		const selectedCols = new Set();
+
+		selectedWells.forEach((wellKey) => {
+			if (!isWellInActiveFormat(wellKey)) return;
+			const r = wellKey.charAt(0);
+			const c = parseInt(wellKey.slice(1), 10);
+			selectedRows.add(r);
+			selectedCols.add(c);
+		});
+
+		if (selectedRows.size === 0) return;
+
+		if (replicateDirection === "Right") {
+			setReplicatesCount(selectedCols.size.toString());
+		} else {
+			setReplicatesCount(selectedRows.size.toString());
+		}
+	}, [selectedWells, replicateDirection]);
 
 	const getWellCoords = (wellKey) => {
 		const r = wellKey.charCodeAt(0) - 65;
@@ -1454,12 +1434,20 @@ export default function App() {
 	const selectRow = (rowLabel) => {
 		setSelectedWells((prev) => {
 			const next = new Set(prev);
+			const targets = [];
 			if (plateFormat === "96") {
 				for (let c = 2; c <= 11; c++) {
-					next.add(`${rowLabel}${c}`);
+					targets.push(`${rowLabel}${c}`);
 				}
 			} else {
-				cols.forEach((c) => next.add(`${rowLabel}${c}`));
+				cols.forEach((c) => targets.push(`${rowLabel}${c}`));
+			}
+
+			const anySelected = targets.some((well) => prev.has(well));
+			if (anySelected) {
+				targets.forEach((well) => next.delete(well));
+			} else {
+				targets.forEach((well) => next.add(well));
 			}
 			return next;
 		});
@@ -1468,11 +1456,19 @@ export default function App() {
 	const selectCol = (colNum) => {
 		setSelectedWells((prev) => {
 			const next = new Set(prev);
+			const targets = [];
 			if (plateFormat === "96") {
 				const targetRows = ["B", "C", "D", "E", "F", "G"];
-				targetRows.forEach((r) => next.add(`${r}${colNum}`));
+				targetRows.forEach((r) => targets.push(`${r}${colNum}`));
 			} else {
-				rows.forEach((r) => next.add(`${r}${colNum}`));
+				rows.forEach((r) => targets.push(`${r}${colNum}`));
+			}
+
+			const anySelected = targets.some((well) => prev.has(well));
+			if (anySelected) {
+				targets.forEach((well) => next.delete(well));
+			} else {
+				targets.forEach((well) => next.add(well));
 			}
 			return next;
 		});
@@ -1513,11 +1509,54 @@ export default function App() {
 		let updatedWells = { ...wells };
 		let newLabels = [];
 
-		sortedWells.forEach((wellKey, index) => {
+		const wellStepMap = {};
+		const stepCount = {};
+		let nextStartStepIndex = 0;
+
+		sortedWells.forEach((wellKey) => {
+			const coords = getWellCoords(wellKey);
+			let predKey = null;
+
+			if (replicateDirection === "Down") {
+				if (coords.r > 0) {
+					// Predecessor is the well directly above
+					predKey = `${String.fromCharCode(65 + coords.r - 1)}${coords.c + 1}`;
+				}
+			} else {
+				if (coords.c > 0) {
+					// Predecessor is the well directly to the left
+					predKey = `${String.fromCharCode(65 + coords.r)}${coords.c}`;
+				}
+			}
+
+			let assignedStepIndex = null;
+			if (
+				predKey &&
+				selectedWells.has(predKey) &&
+				wellStepMap[predKey] !== undefined
+			) {
+				const predStep = wellStepMap[predKey];
+				const currentGroupSize = stepCount[predStep] || 0;
+				if (currentGroupSize < reps) {
+					assignedStepIndex = predStep;
+					stepCount[predStep] = currentGroupSize + 1;
+				}
+			}
+
+			if (assignedStepIndex === null) {
+				assignedStepIndex = nextStartStepIndex;
+				stepCount[assignedStepIndex] = 1;
+				nextStartStepIndex += 1;
+			}
+
+			wellStepMap[wellKey] = assignedStepIndex;
+		});
+
+		sortedWells.forEach((wellKey) => {
 			let stepVal = startVal;
 
 			if (isSetDilution) {
-				const stepIndex = Math.floor(index / reps);
+				const stepIndex = wellStepMap[wellKey];
 				stepVal = startVal / Math.pow(factor, stepIndex);
 			}
 
@@ -1551,10 +1590,19 @@ export default function App() {
 			};
 		});
 
+		// Find all active dose IDs currently referenced by any well in updatedWells
+		const usedDoseIds = new Set(
+			Object.values(updatedWells)
+				.map((w) => w.dose)
+				.filter(Boolean),
+		);
+
 		setLabels((prev) => ({
 			...prev,
 			dose: [
-				...(prev.dose || []).filter((l) => !l.id.startsWith("titr-")),
+				...(prev.dose || []).filter(
+					(l) => !l.id.startsWith("titr-") || usedDoseIds.has(l.id),
+				),
 				...newLabels,
 			],
 		}));
@@ -1741,12 +1789,12 @@ export default function App() {
 		<div className="min-h-screen bg-[#f7f7f9] text-slate-800 flex flex-col font-sans antialiased selection:bg-[#E7ECFF]">
 			<header className="border-b border-slate-200 bg-white px-6 py-4 flex flex-wrap items-center justify-between gap-4 shadow-xs">
 				<div className="flex items-center gap-3">
-					<div className="bg-blue-600 p-2 rounded-lg text-white shadow-sm">
-						<Layers className="h-5 w-5" />
+					<div className="bg-[#2E59A7] p-2 rounded-lg text-white shadow-sm">
+						<FlaskConical className="h-5 w-5" />
 					</div>
 					<div>
 						<h1 className="text-2xl font-medium tracking-normal text-slate-900 flex items-center gap-2">
-							WellMap: An Interactive Plate Map Designer
+							WellMap: An Interactive Plate Layout Designer
 						</h1>
 					</div>
 				</div>
@@ -2145,7 +2193,7 @@ export default function App() {
 																						index
 																					}
 																					/* Clean regular text style without background backplate, shadows or white casks */
-																					className={`font-normal leading-none tracking-normal text-center truncate max-w-[95%] bg-transparent select-none text-slate-900 ${
+																					className={`font-normal leading-[1.1] tracking-normal text-center whitespace-normal break-words max-w-[90%] bg-transparent select-none text-slate-900 ${
 																						plateFormat ===
 																						"96"
 																							? "text-xs md:text-[13px]"
@@ -2383,19 +2431,18 @@ export default function App() {
 
 				{/* Right Sidebar: Active Layer Controller, Combination options & Labels panel */}
 				<aside className="w-full lg:w-[350px] border-t lg:border-t-0 lg:border-l border-slate-200 bg-white p-6 flex flex-col gap-5 overflow-y-auto">
-					{/* Active Layer Select Dropdown matching image_9deb29.jpg */}
 					<div className="space-y-2.5 relative">
-						<div className="flex items-center justify-between px-0.5">
-							<label className="text-xs font-bold text-[#8fa3c7] uppercase tracking-wider">
+						<div className="flex items-center justify-start gap-3 px-2.5">
+							<label className="text-base font-bold text-[#151D29] uppercase tracking-wider">
 								METADATA
 							</label>
 							{!isAddingLayer && (
 								<button
 									onClick={() => setIsAddingLayer(true)}
-									className="flex items-center gap-1 text-sm text-[#2E59A7] hover:text-[#1E3F78] font-semibold transition-colors cursor-pointer select-none"
+									className="flex items-center gap-1 text-sm text-[#2E59A7] hover:text-[#1E3F78] font-bold transition-colors cursor-pointer select-none"
 									title="Add custom metadata layer"
 								>
-									<span>+ Add Layer</span>
+									<span>+ Layer</span>
 								</button>
 							)}
 						</div>
@@ -2433,63 +2480,33 @@ export default function App() {
 								</div>
 							</form>
 						) : (
-							<div className="flex items-center gap-2">
-								<div
-									className="relative flex-1"
-									ref={dropdownRef}
-								>
-									<button
-										type="button"
-										onClick={() =>
-											setIsDropdownOpen(!isDropdownOpen)
-										}
-										className="w-full bg-white text-base font-medium text-slate-900 border border-slate-800 py-2 px-3 rounded-xl outline-none cursor-pointer flex items-center justify-between transition-all"
-									>
-										<span>
-											{layers.find(
-												(lay) =>
-													lay.id === activeLayerId,
-											)?.name || ""}
-										</span>
-										{isDropdownOpen ? (
-											<ChevronUp className="h-4 w-4 text-black" />
-										) : (
-											<ChevronDown className="h-4 w-4 text-black" />
-										)}
-									</button>
+							<div className="flex flex-wrap gap-2 w-full justify-start items-center py-1">
+								{layers.map((lay) => {
+									const isSelected = lay.id === activeLayerId;
+									return (
+										<button
+											key={lay.id}
+											type="button"
+											onClick={() => {
+												setActiveLayerId(lay.id);
+												setEditingLabelId(null);
+											}}
+											className={`px-4 py-1.5 rounded-3xl text-base font-semibold tracking-wide transition-all duration-150 cursor-pointer shrink-0 ${
+												isSelected
+													? "text-white shadow-2xs"
+													: "text-slate-500 bg-[#f4f4f5] hover:bg-slate-200"
+											}`}
+											style={{
+												backgroundColor: isSelected
+													? "#2E59A7"
+													: undefined,
+											}}
+										>
+											{lay.name}
+										</button>
+									);
+								})}
 
-									{isDropdownOpen && (
-										<div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl z-50 py-2 px-1.5 max-h-60 overflow-y-auto animate-fadeIn flex flex-col gap-0.5">
-											{layers.map((lay) => {
-												const isSelected =
-													lay.id === activeLayerId;
-												return (
-													<div
-														key={lay.id}
-														onClick={() => {
-															setActiveLayerId(
-																lay.id,
-															);
-															setEditingLabelId(
-																null,
-															);
-															setIsDropdownOpen(
-																false,
-															);
-														}}
-														className={`text-left text-base py-1 px-3 transition-colors hover:bg-[#2E59A7] hover:text-white rounded-full cursor-pointer ${
-															isSelected
-																? "font-bold text-black bg-slate-50/40"
-																: "text-slate-700 font-normal"
-														}`}
-													>
-														{lay.name}
-													</div>
-												);
-											})}
-										</div>
-									)}
-								</div>
 								{!INITIAL_LAYERS.some(
 									(l) => l.id === activeLayerId,
 								) && (
@@ -2499,10 +2516,10 @@ export default function App() {
 												activeLayerId,
 											)
 										}
-										className="p-2.5 text-slate-400 hover:text-red-500 rounded-full border border-black bg-white hover:bg-red-50 hover:border-red-500 transition-colors cursor-pointer shrink-0"
-										title="Delete this custom layer"
+										className="p-1.5 text-slate-400 hover:text-red-500 rounded-full bg-[#f4f4f5] hover:bg-red-50 transition-colors cursor-pointer shrink-0"
+										title="Delete active custom layer"
 									>
-										<Trash2 className="h-4 w-4" />
+										<Trash2 className="h-3.5 w-3.5" />
 									</button>
 								)}
 							</div>
@@ -2534,7 +2551,7 @@ export default function App() {
 												);
 												setIsDoseSuggestionsOpen(true);
 											}}
-											className="w-full text-sm rounded-xl border border-black p-2.5 px-4 bg-white outline-none focus:border-[#2E59A7] font-medium text-slate-900 transition-colors"
+											className="w-full text-base rounded-xl border border-black p-2.5 px-4 bg-white outline-none focus:border-[#2E59A7] font-medium text-slate-900 transition-colors"
 											placeholder="e.g. 10uM, 100ng/ml"
 											required
 										/>
@@ -3065,16 +3082,24 @@ export default function App() {
 										className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-3 animate-fadeIn"
 									>
 										<div className="flex gap-2 items-center">
-											<input
-												type="color"
-												value={newLabelColor}
-												onChange={(e) =>
-													setNewLabelColor(
-														e.target.value,
-													)
-												}
-												className="w-8 h-8 rounded bg-transparent border-0 cursor-pointer shadow-xs shrink-0"
-											/>
+											<div
+												className="w-8 h-8 rounded-full border border-slate-200 shadow-inner relative overflow-hidden shrink-0"
+												style={{
+													backgroundColor:
+														newLabelColor,
+												}}
+											>
+												<input
+													type="color"
+													value={newLabelColor}
+													onChange={(e) =>
+														setNewLabelColor(
+															e.target.value,
+														)
+													}
+													className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+												/>
+											</div>
 											<input
 												type="text"
 												placeholder="Label name"
@@ -3099,7 +3124,7 @@ export default function App() {
 													onClick={() =>
 														setNewLabelColor(color)
 													}
-													className={`w-5 h-5 rounded border shadow-3xs transition-transform hover:scale-115 shrink-0 ${
+													className={`w-5 h-5 rounded-full border shadow-3xs transition-transform hover:scale-115 shrink-0 ${
 														newLabelColor === color
 															? "border-black ring-2 ring-[#2E59A7]/50"
 															: "border-slate-200"
@@ -3199,15 +3224,9 @@ export default function App() {
 						<div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
 							<div>
 								<h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-									<Sparkles className="h-5 w-5 text-blue-600" />
-									Export Dashboard: Snapshot & Conditions
-									Table
+									<Download className="h-5 w-5 text-[#2E59A7]" />
+									Export Plate Layout and Metadata Table
 								</h2>
-								<p className="text-xs text-slate-500 font-medium">
-									Preview your high-fidelity plate layout
-									snapshot and generated experimental summary
-									table before downloading.
-								</p>
 							</div>
 							<button
 								onClick={() => setIsExportModalOpen(false)}
