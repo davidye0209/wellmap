@@ -380,6 +380,8 @@ export default function App() {
 			{
 				treatmentIds: string[];
 				doseId?: string;
+				doseIds: string[];
+				isDilution?: boolean;
 				durationId?: string;
 				biomarkerId?: string;
 				statusId?: string;
@@ -421,9 +423,9 @@ export default function App() {
 				return; // Empty well, skip
 			}
 
+			// Group by everything except dose to collapse dilution series
 			const comboKey = JSON.stringify({
 				t: treatmentIds.slice().sort(),
-				d: wellData.dose || "",
 				dur: wellData.duration || "",
 				b: wellData.biomarker || "",
 				s: wellData.status || "",
@@ -433,7 +435,7 @@ export default function App() {
 			if (!combos[comboKey]) {
 				combos[comboKey] = {
 					treatmentIds,
-					doseId: wellData.dose,
+					doseIds: [],
 					durationId: wellData.duration,
 					biomarkerId: wellData.biomarker,
 					statusId: wellData.status,
@@ -442,6 +444,23 @@ export default function App() {
 				};
 			}
 			combos[comboKey].wells.push(wellKey);
+			if (wellData.dose && !combos[comboKey].doseIds.includes(wellData.dose)) {
+				combos[comboKey].doseIds.push(wellData.dose);
+			}
+		});
+
+		// Determine if a combo has multiple unique doses (isDilution)
+		Object.values(combos).forEach((combo) => {
+			if (combo.doseIds.length > 1) {
+				combo.isDilution = true;
+				combo.doseId = undefined;
+			} else if (combo.doseIds.length === 1) {
+				combo.isDilution = false;
+				combo.doseId = combo.doseIds[0];
+			} else {
+				combo.isDilution = false;
+				combo.doseId = undefined;
+			}
 		});
 
 		return Object.values(combos);
@@ -642,7 +661,7 @@ export default function App() {
 		const activeLayers = layers.filter((layer) => {
 			if (layer.id === "treatment") return true;
 			return activeCombos.some((c) => {
-				if (layer.id === "dose") return !!c.doseId;
+				if (layer.id === "dose") return !!c.doseId || c.isDilution;
 				if (layer.id === "duration") return !!c.durationId;
 				if (layer.id === "biomarker") return !!c.biomarkerId;
 				if (layer.id === "status") return !!c.statusId;
@@ -801,22 +820,23 @@ export default function App() {
 											}
 
 											let cellVal = "—";
-											if (
-												layer.id === "dose" &&
-												combo.doseId
-											) {
-												const match = (
-													labels.dose || []
-												).find(
-													(l) =>
-														l.id === combo.doseId,
-												);
-												if (match) {
-													cellVal =
-														match.value !==
-														undefined
-															? `${match.value} ${match.unit || "µM"}`
-															: match.name;
+											if (layer.id === "dose") {
+												if (combo.isDilution) {
+													cellVal = "Dilution";
+												} else if (combo.doseId) {
+													const match = (
+														labels.dose || []
+													).find(
+														(l) =>
+															l.id === combo.doseId,
+													);
+													if (match) {
+														cellVal =
+															match.value !==
+															undefined
+																? `${match.value} ${match.unit || "µM"}`
+																: match.name;
+													}
 												}
 											} else if (
 												layer.id === "duration" &&
@@ -917,6 +937,27 @@ export default function App() {
 	const [newLabelColor, setNewLabelColor] = useState("#7389d8");
 	const [newLabelValue, setNewLabelValue] = useState("");
 	const [newLabelUnit, setNewLabelUnit] = useState("µM");
+
+	useEffect(() => {
+		const activeLayerIds = new Set(layers.map((l) => l.id));
+		const usedColors = new Set();
+		Object.entries(labels).forEach(([layerId, lblList]) => {
+			if (activeLayerIds.has(layerId) && Array.isArray(lblList)) {
+				lblList.forEach((l) => {
+					if (l.color) {
+						usedColors.add(l.color.toLowerCase());
+					}
+				});
+			}
+		});
+
+		const snakeIndices = [0, 1, 2, 3, 4, 9, 8, 7, 6, 5, 10, 11, 12, 13, 14, 19, 18, 17, 16, 15, 20, 21, 22, 23, 24];
+		const nextColor = snakeIndices
+			.map((idx) => ACCESSIBLE_PALETTE[idx])
+			.find((color) => !usedColors.has(color.toLowerCase())) || ACCESSIBLE_PALETTE[0];
+		
+		setNewLabelColor(nextColor);
+	}, [labels, isAddingLabel, activeLayerId, layers]);
 
 	const [titrationDoseInput, setTitrationDoseInput] = useState("");
 	const [isDoseSuggestionsOpen, setIsDoseSuggestionsOpen] = useState(false);
@@ -1314,6 +1355,51 @@ export default function App() {
 			[activeLayerId]: [...(prev[activeLayerId] || []), newLabel],
 		}));
 
+		if (selectedWells.size > 0) {
+			setWells((prev) => {
+				const next = { ...prev };
+				selectedWells.forEach((wellKey) => {
+					if (!isWellInActiveFormat(wellKey)) return;
+					if (!next[wellKey]) next[wellKey] = {};
+
+					if (activeLayerId === "treatment") {
+						let currentTreatments = next[wellKey].treatment;
+						if (!Array.isArray(currentTreatments)) {
+							currentTreatments = currentTreatments
+								? [currentTreatments]
+								: [];
+						}
+
+						if (isCombinationMode) {
+							if (currentTreatments.includes(newId)) {
+								currentTreatments = currentTreatments.filter(
+									(t) => t !== newId,
+								);
+							} else {
+								currentTreatments = [
+									...currentTreatments,
+									newId,
+								];
+							}
+						} else {
+							currentTreatments = [newId];
+						}
+
+						next[wellKey] = {
+							...next[wellKey],
+							treatment: currentTreatments,
+						};
+					} else {
+						next[wellKey] = {
+							...next[wellKey],
+							[activeLayerId]: newId,
+						};
+					}
+				});
+				return next;
+			});
+		}
+
 		setNewLabelName("");
 		setNewLabelValue("");
 		setIsAddingLabel(false);
@@ -1474,8 +1560,8 @@ export default function App() {
 		});
 	};
 
-	const handleApplyTitration = (e) => {
-		e.preventDefault();
+	const handleApplyTitration = (e, customInput) => {
+		if (e) e.preventDefault();
 		if (selectedWells.size === 0) return;
 
 		saveToHistory(wells);
@@ -1499,7 +1585,7 @@ export default function App() {
 		});
 
 		const { value: parsedVal, unit: parsedUnit } =
-			parseDoseInput(titrationDoseInput);
+			parseDoseInput(customInput !== undefined ? customInput : titrationDoseInput);
 		const startVal = parsedVal || 1.0;
 		const titrationUnitToUse = parsedUnit || "µM";
 
@@ -1607,6 +1693,7 @@ export default function App() {
 			],
 		}));
 		setWells(updatedWells);
+		setTitrationDoseInput("");
 	};
 
 	const activeLabelsList = labels[activeLayerId] || [];
@@ -1672,13 +1759,61 @@ export default function App() {
 		).length;
 	}, [wells, plateFormat]);
 
+	const getDoseCategory = (unit) => {
+		const u = (unit || "µM").trim().toLowerCase();
+		if (["mm", "µm", "μm", "um", "nm", "pm"].includes(u)) {
+			return "molar";
+		}
+		if (["g/ml", "mg/ml", "µg/ml", "ug/ml", "ng/ml", "pg/ml"].includes(u)) {
+			return "mass";
+		}
+		if (u === "%") {
+			return "percentage";
+		}
+		return "other";
+	};
+
+	const convertDoseToStandardValue = (value, unit) => {
+		if (value === undefined || value === null || isNaN(value)) return 0;
+		const u = (unit || "µM").trim().toLowerCase();
+		
+		// Molar (standardize to pM)
+		if (u === "mm") return value * 1000000000;
+		if (u === "µm" || u === "μm" || u === "um") return value * 1000000;
+		if (u === "nm") return value * 1000;
+		if (u === "pm") return value;
+
+		// Mass Concentration (standardize to pg/ml)
+		if (u === "g/ml") return value * 1000000000000;
+		if (u === "mg/ml") return value * 1000000000;
+		if (u === "µg/ml" || u === "ug/ml") return value * 1000000;
+		if (u === "ng/ml") return value * 1000;
+		if (u === "pg/ml") return value;
+
+		return value;
+	};
+
 	const getDoseIntensity = (doseLabelId) => {
 		if (!doseLabelId) return 1.0;
 		const doseList = labels.dose || [];
-		const index = doseList.findIndex((d) => d.id === doseLabelId);
+		const targetLabel = doseList.find((d) => d.id === doseLabelId);
+		if (!targetLabel || targetLabel.value === undefined) return 1.0;
+
+		const targetCategory = getDoseCategory(targetLabel.unit);
+
+		// Filter for numeric dose labels in the SAME category
+		const sameCategoryDoses = doseList
+			.filter((d) => d.value !== undefined && getDoseCategory(d.unit) === targetCategory)
+			.map((d) => ({
+				id: d.id,
+				stdVal: convertDoseToStandardValue(d.value, d.unit),
+			}))
+			.sort((a, b) => b.stdVal - a.stdVal);
+
+		const index = sameCategoryDoses.findIndex((d) => d.id === doseLabelId);
 		if (index === -1) return 1.0;
 
-		const ratio = index / Math.max(1, doseList.length - 1);
+		const ratio = index / Math.max(1, sameCategoryDoses.length - 1);
 		return 1.0 - ratio * 0.55;
 	};
 
@@ -2531,7 +2666,7 @@ export default function App() {
 						<div className="space-y-4">
 							{/* Titration curves editor form matching image_9e766a.png layout */}
 							<form
-								onSubmit={handleApplyTitration}
+								onSubmit={(e) => handleApplyTitration(e, undefined)}
 								className="space-y-3"
 							>
 								<div>
@@ -2573,12 +2708,10 @@ export default function App() {
 															key={opt}
 															type="button"
 															onClick={() => {
-																setTitrationDoseInput(
-																	opt,
-																);
 																setIsDoseSuggestionsOpen(
 																	false,
 																);
+																handleApplyTitration(null, opt);
 															}}
 															className="text-left text-sm py-2 px-4 transition-colors hover:bg-[#2E59A7] hover:text-white rounded-full cursor-pointer w-full bg-transparent border-0 font-medium text-slate-700 block"
 														>
@@ -2823,17 +2956,19 @@ export default function App() {
 									</div>
 								)}
 
-								<button
-									type="submit"
-									disabled={selectedWells.size === 0}
-									className={`w-full mt-3 font-medium text-sm py-2.5 px-5 rounded-full transition-all flex items-center justify-center gap-1.5 ${
-										selectedWells.size > 0
-											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer"
-											: "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
-									}`}
-								>
-									Apply
-								</button>
+								{isSetDilution && (
+									<button
+										type="submit"
+										disabled={selectedWells.size === 0}
+										className={`w-full mt-3 font-medium text-sm py-2.5 px-5 rounded-full transition-all flex items-center justify-center gap-1.5 ${
+											selectedWells.size > 0
+												? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer"
+												: "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+										}`}
+									>
+										Apply
+									</button>
+								)}
 							</form>
 						</div>
 					) : (
@@ -3142,7 +3277,7 @@ export default function App() {
 												type="submit"
 												className="flex-1 bg-[#2E59A7] hover:bg-[#1E3F78] text-white font-medium text-xs py-2 px-4 rounded-full transition-colors cursor-pointer"
 											>
-												Save
+												{selectedWells.size > 0 ? "Save & Apply" : "Save"}
 											</button>
 											<button
 												type="button"
