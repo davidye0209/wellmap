@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { toPng } from "html-to-image";
+import { parseLayoutFile } from "./tecanParser";
 import {
 	Plus,
 	RotateCcw,
@@ -243,7 +244,8 @@ export default function App() {
 		});
 	};
 
-	const [labels, setLabels] = useState(INITIAL_LABELS);
+	const [labels, setLabels] =
+		useState<Record<string, any[]>>(INITIAL_LABELS);
 	const [wells, setWells] =
 		useState<Record<string, any>>(buildDefaultWells());
 
@@ -1843,19 +1845,8 @@ export default function App() {
 		const reader = new FileReader();
 		reader.onload = (event) => {
 			try {
-				const data = JSON.parse(event.target?.result as string);
-
-				if (
-					!data.wells ||
-					!data.labels ||
-					!data.layers ||
-					!data.plateFormat
-				) {
-					alert(
-						"Invalid layout file format. Please upload a valid exported WellMap layout JSON file.",
-					);
-					return;
-				}
+				const content = (event.target?.result as string) || "";
+				const data = parseLayoutFile(content, file.name);
 
 				saveToHistory(wells);
 				setPlateFormat(data.plateFormat);
@@ -1864,8 +1855,17 @@ export default function App() {
 				setWells(data.wells);
 				setSelectedWells(new Set<string>());
 				setLastClickedWell(null);
+
+				// Ensure dose layer is visible in preview if loaded file contains doses
+				if (data.labels?.dose && data.labels.dose.length > 0) {
+					setVisibleLayers((prev) => ({ ...prev, dose: true }));
+				}
 			} catch (err) {
-				alert("Failed to parse JSON file.");
+				const msg =
+					err instanceof Error
+						? err.message
+						: "Failed to parse layout file. Please ensure it is a valid WellMap JSON or Tecan D300 XML file.";
+				alert(msg);
 			}
 		};
 		reader.readAsText(file);
@@ -1979,13 +1979,13 @@ export default function App() {
 
 					<label
 						className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all px-5 py-2 rounded-full font-medium cursor-pointer"
-						title="Upload an exported layout JSON file"
+						title="Upload an exported layout JSON or Tecan D300 XML file"
 					>
 						<FileText className="h-4 w-4 text-white" />
 						Import
 						<input
 							type="file"
-							accept=".json"
+							accept=".json,.xml"
 							onChange={handleLoadLayout}
 							className="hidden"
 						/>
