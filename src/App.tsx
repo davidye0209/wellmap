@@ -16,6 +16,7 @@ import {
 	Trash2,
 	Edit2,
 	Download,
+	Save,
 	CheckSquare,
 	Square,
 	ChevronDown,
@@ -204,9 +205,26 @@ const buildDefaultWells = () => {
 	return defaultWells;
 };
 
+const LOCAL_STORAGE_KEY = "wellmap_saved_plate_layout";
+
+const loadSavedLayoutFromStorage = () => {
+	try {
+		const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+		if (!raw) return null;
+		return JSON.parse(raw);
+	} catch (e) {
+		console.warn("Failed to parse saved layout from localStorage", e);
+		return null;
+	}
+};
+
 export default function App() {
-	const [plateFormat, setPlateFormat] = useState("96"); // Initialized to 96-well as default
-	const [layers, setLayers] = useState(INITIAL_LAYERS);
+	const savedData = useMemo(() => loadSavedLayoutFromStorage(), []);
+
+	const [plateFormat, setPlateFormat] = useState(
+		savedData?.plateFormat || "96",
+	);
+	const [layers, setLayers] = useState(savedData?.layers || INITIAL_LAYERS);
 	const [activeLayerId, setActiveLayerId] = useState("treatment");
 	const [isCombinationMode, setIsCombinationMode] = useState(false);
 
@@ -244,10 +262,13 @@ export default function App() {
 		});
 	};
 
-	const [labels, setLabels] =
-		useState<Record<string, any[]>>(INITIAL_LABELS);
-	const [wells, setWells] =
-		useState<Record<string, any>>(buildDefaultWells());
+	const [labels, setLabels] = useState<Record<string, any[]>>(
+		savedData?.labels || INITIAL_LABELS,
+	);
+	const [wells, setWells] = useState<Record<string, any>>(
+		savedData?.wells || buildDefaultWells(),
+	);
+	const [saveNotification, setSaveNotification] = useState<string | null>(null);
 
 	const [selectedWells, setSelectedWells] = useState<Set<string>>(
 		new Set<string>(),
@@ -753,12 +774,20 @@ export default function App() {
 
 										{isSnapAnchor && snapSecondaryName && (
 											<div
-												className="absolute top-0.5 left-0.5 z-20 pointer-events-none select-none flex items-center gap-0.5 px-0.5 py-0.2 rounded bg-slate-900/80 text-white font-mono font-medium leading-none tracking-tight"
+												className="absolute top-0.5 left-0.5 z-20 pointer-events-none select-none flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/85 text-white font-mono font-medium leading-tight tracking-tight max-w-[280px] break-words whitespace-normal text-left"
 												style={{
 													fontSize:
 														plateFormat === "96"
-															? "8px"
-															: "6px",
+															? snapSecondaryName.length > 14
+																? "7px"
+																: snapSecondaryName.length > 8
+																? "8px"
+																: "9px"
+															: snapSecondaryName.length > 14
+																? "5.5px"
+																: snapSecondaryName.length > 8
+																? "6px"
+																: "7px",
 												}}
 											>
 												{snapSecondaryName}
@@ -1380,7 +1409,7 @@ export default function App() {
 				} else if (activeLayerId === "biomarker") {
 					const bio = well?.biomarker;
 					if (Array.isArray(bio)) {
-						return bio.includes(labelId);
+						return bio.length === 1 && bio[0] === labelId;
 					}
 					return bio === labelId;
 				} else {
@@ -2054,6 +2083,26 @@ export default function App() {
 		return 1.0 - ratio * 0.55;
 	};
 
+	const handleSaveMapLocally = () => {
+		try {
+			const mapData = {
+				savedAt: new Date().toISOString(),
+				plateFormat,
+				layers,
+				labels,
+				wells,
+			};
+			localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(mapData));
+			setSaveNotification("Map saved locally");
+			setTimeout(() => {
+				setSaveNotification(null);
+			}, 2500);
+		} catch (err) {
+			console.error("Failed to save map locally", err);
+			alert("Failed to save map to local storage.");
+		}
+	};
+
 	const handleExportData = () => {
 		const output = {
 			exportedAt: new Date().toISOString(),
@@ -2227,6 +2276,15 @@ export default function App() {
 					</label>
 
 					<button
+						onClick={handleSaveMapLocally}
+						className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all px-5 py-2 rounded-full font-medium cursor-pointer"
+						title="Save current plate map locally in your browser"
+					>
+						<Save className="h-4 w-4 text-white" />
+						Save
+					</button>
+
+					<button
 						onClick={() => setIsExportModalOpen(true)}
 						className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all px-5 py-2 rounded-full font-medium cursor-pointer"
 						title="Export plate map snapshot & summary table"
@@ -2236,6 +2294,14 @@ export default function App() {
 					</button>
 				</div>
 			</header>
+
+			{/* Save Notification Toast */}
+			{saveNotification && (
+				<div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl shadow-lg border border-slate-700 font-medium text-sm animate-fadeIn">
+					<Check className="h-4 w-4 text-green-400" />
+					<span>{saveNotification}</span>
+				</div>
+			)}
 
 			{/* Main Workspace Frame */}
 			<div className="flex-1 flex flex-col lg:flex-row overflow-hidden w-full">
@@ -2671,13 +2737,20 @@ export default function App() {
 														{isTerritoryAnchor &&
 															secondaryLayerName && (
 																<div
-																	className="absolute top-0.5 left-0.5 z-20 pointer-events-none select-none flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/80 text-white font-mono font-medium leading-none tracking-tight shadow-xs backdrop-blur-[1px]"
+																	className="absolute top-0.5 left-0.5 z-20 pointer-events-none select-none flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/85 text-white font-mono font-medium leading-tight tracking-tight shadow-xs backdrop-blur-[1px] max-w-[280px] break-words whitespace-normal text-left"
 																	style={{
 																		fontSize:
-																			plateFormat ===
-																			"96"
-																				? "9px"
-																				: "7px",
+																			plateFormat === "96"
+																				? secondaryLayerName.length > 14
+																					? "7.5px"
+																					: secondaryLayerName.length > 8
+																					? "8.5px"
+																					: "9.5px"
+																				: secondaryLayerName.length > 14
+																					? "6px"
+																					: secondaryLayerName.length > 8
+																					? "6.5px"
+																					: "7.5px",
 																	}}
 																>
 																	{
@@ -3479,99 +3552,99 @@ export default function App() {
 													onDoubleClick={() =>
 														startEditingLabel(label)
 													}
-													className={`group flex items-center justify-between gap-1.5 py-2 px-3.5 rounded-xl border border-slate-800 transition-all select-none w-[140px] shrink-0 ${
-														(isCheckedInCombination && isCombinationMode) ||
-														(isBiomarkerLayer && isPresentInSelection)
-															? "bg-[#2E59A7] text-white shadow-xs"
-															: isPresentInSelection && !isTreatmentLayer
-															? "bg-[#2E59A7] text-white shadow-xs"
-															: "bg-slate-50/50 hover:bg-[#2E59A7]"
+													className={`group flex items-center justify-between gap-1.5 py-2 px-3.5 rounded-xl border border-slate-800 transition-all select-none shrink-0 ${
+														isEditing
+															? "w-full max-w-[280px] bg-white ring-2 ring-[#2E59A7] shadow-sm flex-col items-stretch gap-2.5 p-3"
+															: `w-[140px] ${
+																	(isCheckedInCombination && isCombinationMode) ||
+																	(isBiomarkerLayer && isPresentInSelection)
+																		? "bg-[#2E59A7] text-white shadow-xs"
+																		: isPresentInSelection && !isTreatmentLayer
+																		? "bg-[#2E59A7] text-white shadow-xs"
+																		: "bg-slate-50/50 hover:bg-[#2E59A7]"
+															  }`
 													}`}
-													title="Double-click to edit this label inline"
+													title={isEditing ? undefined : "Double-click to edit this label inline"}
 												>
 													{isEditing ? (
 														<div
-															className="flex items-center gap-2 w-full"
+															className="flex flex-col gap-2.5 w-full"
 															onKeyDown={(e) => {
-																if (
-																	e.key ===
-																	"Enter"
-																)
-																	handleSaveLabelEdit(
-																		label.id,
-																	);
-																if (
-																	e.key ===
-																	"Escape"
-																)
-																	setEditingLabelId(
-																		null,
-																	);
+																if (e.key === "Enter")
+																	handleSaveLabelEdit(label.id);
+																if (e.key === "Escape")
+																	setEditingLabelId(null);
 															}}
 														>
-															<div
-																className="w-4 h-4 rounded-full shrink-0 shadow-inner border border-slate-200 relative overflow-hidden shrink-0"
-																style={{
-																	backgroundColor:
-																		editingColor,
-																}}
-															>
+															<div className="flex items-center gap-2 w-full">
+																<div
+																	className="w-6 h-6 rounded-full shrink-0 shadow-inner border border-slate-300 relative overflow-hidden cursor-pointer"
+																	style={{
+																		backgroundColor: editingColor,
+																	}}
+																	title="Click to pick a custom color"
+																>
+																	<input
+																		type="color"
+																		value={editingColor}
+																		onChange={(e) =>
+																			setEditingColor(e.target.value)
+																		}
+																		className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+																	/>
+																</div>
 																<input
-																	type="color"
-																	value={
-																		editingColor
+																	type="text"
+																	value={editingName}
+																	onChange={(e) =>
+																		setEditingName(e.target.value)
 																	}
-																	onChange={(
-																		e,
-																	) =>
-																		setEditingColor(
-																			e
-																				.target
-																				.value,
-																		)
-																	}
-																	className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+																	className="text-xs bg-slate-50 border border-slate-300 px-2 py-1.5 rounded-lg w-full outline-none focus:border-[#2E59A7] focus:bg-white font-semibold text-slate-800"
+																	autoFocus
+																	onFocus={(e) => e.target.select()}
+																	placeholder="Label name"
+																	required
 																/>
+																<button
+																	type="button"
+																	onClick={() =>
+																		handleSaveLabelEdit(label.id)
+																	}
+																	className="p-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg cursor-pointer shrink-0 transition-colors"
+																	title="Save changes (Enter)"
+																>
+																	<Check className="h-3.5 w-3.5" />
+																</button>
+																<button
+																	type="button"
+																	onClick={() =>
+																		setEditingLabelId(null)
+																	}
+																	className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg cursor-pointer shrink-0 transition-colors"
+																	title="Cancel (Esc)"
+																>
+																	<X className="h-3.5 w-3.5" />
+																</button>
 															</div>
-															<input
-																type="text"
-																value={
-																	editingName
-																}
-																onChange={(e) =>
-																	setEditingName(
-																		e.target
-																			.value,
-																	)
-																}
-																className="text-xs bg-white border border-slate-200 px-1.5 py-1 rounded w-full outline-none focus:border-blue-500 font-semibold"
-																autoFocus
-																onFocus={(e) =>
-																	e.target.select()
-																}
-																required
-															/>
-															<button
-																onClick={() =>
-																	handleSaveLabelEdit(
-																		label.id,
-																	)
-																}
-																className="p-1 text-green-600 hover:bg-green-50 rounded"
-																title="Save Changes"
-															>
-																<Check className="h-3.5 w-3.5" />
-															</button>
-															<button
-																onClick={() =>
-																	setEditingLabelId(
-																		null,
-																	)
-																}
-																className="p-1 text-slate-400 hover:bg-slate-100 rounded"
-															>
-																<X className="h-3.5 w-3.5" />
-															</button>
+
+															{/* Quick Palette swatch selector */}
+															<div className="flex flex-wrap gap-1 items-center pt-1 border-t border-slate-100">
+																<span className="text-[10px] text-slate-400 font-medium mr-1">Color:</span>
+																{ACCESSIBLE_PALETTE.slice(0, 10).map((c) => (
+																	<button
+																		key={c}
+																		type="button"
+																		onClick={() => setEditingColor(c)}
+																		className={`w-4 h-4 rounded-full border transition-transform hover:scale-125 shrink-0 ${
+																			editingColor.toLowerCase() === c.toLowerCase()
+																				? "border-black ring-2 ring-[#2E59A7]/50"
+																				: "border-slate-200"
+																		}`}
+																		style={{ backgroundColor: c }}
+																		title={c}
+																	/>
+																))}
+															</div>
 														</div>
 													) : (
 														<>
