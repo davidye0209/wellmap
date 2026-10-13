@@ -385,6 +385,7 @@ export default function App() {
 				doseIds: string[];
 				isDilution?: boolean;
 				durationId?: string;
+				biomarkerIds?: string[];
 				biomarkerId?: string;
 				statusId?: string;
 				customLayers: Record<string, string>;
@@ -402,7 +403,13 @@ export default function App() {
 			const hasTreatment = treatmentIds.length > 0;
 			const hasDose = !!wellData.dose;
 			const hasDuration = !!wellData.duration;
-			const hasBiomarker = !!wellData.biomarker;
+			let biomarkerIds: string[] = [];
+			if (Array.isArray(wellData.biomarker)) {
+				biomarkerIds = wellData.biomarker;
+			} else if (wellData.biomarker) {
+				biomarkerIds = [wellData.biomarker];
+			}
+			const hasBiomarker = biomarkerIds.length > 0;
 			const hasStatus = !!wellData.status;
 
 			const customVals: Record<string, string> = {};
@@ -429,7 +436,7 @@ export default function App() {
 			const comboKey = JSON.stringify({
 				t: treatmentIds.slice().sort(),
 				dur: wellData.duration || "",
-				b: wellData.biomarker || "",
+				b: biomarkerIds.slice().sort(),
 				s: wellData.status || "",
 				c: customVals,
 			});
@@ -439,7 +446,8 @@ export default function App() {
 					treatmentIds,
 					doseIds: [],
 					durationId: wellData.duration,
-					biomarkerId: wellData.biomarker,
+					biomarkerIds,
+					biomarkerId: biomarkerIds[0],
 					statusId: wellData.status,
 					customLayers: customVals,
 					wells: [],
@@ -566,52 +574,196 @@ export default function App() {
 								const doseId = assignedWellMetadata.dose;
 								const doseIntensity = getDoseIntensity(doseId);
 
-								// Generate text overlays for active preview layers
+								// Generate overlays for treatment & dose (inside well)
 								const overlays: {
 									layerId: string;
 									text: string;
 								}[] = [];
-								layers.slice(1).forEach((layer) => {
-									if (visibleLayers[layer.id]) {
-										const assignedLabelId =
-											assignedWellMetadata[layer.id];
-										const matchedLabel = assignedLabelId
-											? (labels[layer.id] || []).find(
-													(l: any) =>
-														l.id ===
-														assignedLabelId,
-												)
-											: null;
-										if (matchedLabel) {
-											let displayText = matchedLabel.name;
-											if (
-												layer.id === "dose" &&
-												matchedLabel.value !== undefined
-											) {
-												displayText = formatDoseDisplay(
-													matchedLabel.value,
-													matchedLabel.unit || "µM",
-													1,
-												);
-											} else {
-												displayText =
-													getAbbreviation(
-														displayText,
+								if (visibleLayers.dose) {
+									const assignedDoseId =
+										assignedWellMetadata.dose;
+									const matchedDoseLabel = assignedDoseId
+										? (labels.dose || []).find(
+												(l: any) =>
+													l.id === assignedDoseId,
+											)
+										: null;
+									if (matchedDoseLabel) {
+										const displayText =
+											matchedDoseLabel.value !== undefined
+												? formatDoseDisplay(
+														matchedDoseLabel.value,
+														matchedDoseLabel.unit ||
+															"µM",
+														1,
+													)
+												: getAbbreviation(
+														matchedDoseLabel.name,
 													);
+										overlays.push({
+											layerId: "dose",
+											text: displayText,
+										});
+									}
+								}
+
+								// Secondary metadata monochrome territory shading for snapshot
+								let snapSecondaryName: string | null = null;
+								let snapSecondaryLayerId: string | null = null;
+								for (const layer of layers.slice(1)) {
+									if (
+										layer.id !== "dose" &&
+										visibleLayers[layer.id]
+									) {
+										const assignedVal =
+											assignedWellMetadata[layer.id];
+										if (assignedVal) {
+											if (layer.id === "biomarker") {
+												const bIds = Array.isArray(assignedVal)
+													? assignedVal
+													: [assignedVal];
+												if (bIds.length > 0) {
+													const matchedNames = bIds
+														.map((id: string) => {
+															const m = (labels.biomarker || []).find((l: any) => l.id === id);
+															return m ? getAbbreviation(m.name) : "";
+														})
+														.filter(Boolean);
+													if (matchedNames.length > 0) {
+														snapSecondaryName = matchedNames.join(" + ");
+														snapSecondaryLayerId = layer.id;
+														break;
+													}
+												}
+											} else {
+												const matchedLabel = (
+													labels[layer.id] || []
+												).find(
+													(l: any) =>
+														l.id === assignedVal,
+												);
+												if (matchedLabel) {
+													snapSecondaryName =
+														getAbbreviation(
+															matchedLabel.name,
+														);
+													snapSecondaryLayerId = layer.id;
+													break;
+												}
 											}
-											overlays.push({
-												layerId: layer.id,
-												text: displayText,
-											});
 										}
 									}
-								});
+								}
+
+								const hasSameSnapTerritory = (
+									nr: number,
+									nc: number,
+								) => {
+									if (
+										!snapSecondaryLayerId ||
+										nr < 0 ||
+										nr >= rows.length ||
+										nc < 0 ||
+										nc >= cols.length
+									)
+										return false;
+									const neighborKey = `${rows[nr]}${cols[nc]}`;
+									const nMeta = wells[neighborKey] || {};
+									if (snapSecondaryLayerId === "biomarker") {
+										const aVal = assignedWellMetadata.biomarker;
+										const nVal = nMeta.biomarker;
+										const aList = (Array.isArray(aVal) ? aVal : aVal ? [aVal] : []).slice().sort();
+										const nList = (Array.isArray(nVal) ? nVal : nVal ? [nVal] : []).slice().sort();
+										return JSON.stringify(aList) === JSON.stringify(nList);
+									}
+									return (
+										nMeta[snapSecondaryLayerId] ===
+										assignedWellMetadata[
+											snapSecondaryLayerId
+										]
+									);
+								};
+
+								const snapTerrTop = hasSameSnapTerritory(
+									rIdx - 1,
+									cIdx,
+								);
+								const snapTerrBottom = hasSameSnapTerritory(
+									rIdx + 1,
+									cIdx,
+								);
+								const snapTerrLeft = hasSameSnapTerritory(
+									rIdx,
+									cIdx - 1,
+								);
+								const snapTerrRight = hasSameSnapTerritory(
+									rIdx,
+									cIdx + 1,
+								);
+								const snapHalfGap = 2;
+								const isSnapAnchor =
+									snapSecondaryLayerId &&
+									!snapTerrTop &&
+									!snapTerrLeft;
 
 								return (
 									<div
 										key={`snapshot-well-${wellKey}`}
-										className="relative aspect-square flex items-center justify-center"
+										className="relative aspect-square flex items-center justify-center overflow-visible"
 									>
+										{snapSecondaryLayerId && (
+											<div
+												className="absolute pointer-events-none z-0 bg-slate-900/10"
+												style={{
+													top: snapTerrTop
+														? `-${snapHalfGap}px`
+														: "0px",
+													bottom: snapTerrBottom
+														? `-${snapHalfGap}px`
+														: "0px",
+													left: snapTerrLeft
+														? `-${snapHalfGap}px`
+														: "0px",
+													right: snapTerrRight
+														? `-${snapHalfGap}px`
+														: "0px",
+													borderTopLeftRadius:
+														!snapTerrTop &&
+														!snapTerrLeft
+															? "3px"
+															: "0px",
+													borderTopRightRadius:
+														!snapTerrTop &&
+														!snapTerrRight
+															? "3px"
+															: "0px",
+													borderBottomLeftRadius:
+														!snapTerrBottom &&
+														!snapTerrLeft
+															? "3px"
+															: "0px",
+													borderBottomRightRadius:
+														!snapTerrBottom &&
+														!snapTerrRight
+															? "3px"
+															: "0px",
+												}}
+											/>
+										)}
+
+										{isSnapAnchor && snapSecondaryName && (
+											<div
+												className="absolute top-0.5 left-0.5 z-20 pointer-events-none select-none flex items-center gap-0.5 px-0.5 py-0.2 rounded bg-slate-900/80 text-white font-mono font-medium leading-none tracking-tight"
+												style={{
+													fontSize:
+														plateFormat === "96"
+															? "8px"
+															: "6px",
+												}}
+											>
+												{snapSecondaryName}
+											</div>
+										)}
 										<div
 											className="rounded-full border w-[92%] h-[92%] flex items-center justify-center overflow-hidden relative"
 											style={{
@@ -665,7 +817,7 @@ export default function App() {
 			return activeCombos.some((c) => {
 				if (layer.id === "dose") return !!c.doseId || c.isDilution;
 				if (layer.id === "duration") return !!c.durationId;
-				if (layer.id === "biomarker") return !!c.biomarkerId;
+				if (layer.id === "biomarker") return (c.biomarkerIds && c.biomarkerIds.length > 0) || !!c.biomarkerId;
 				if (layer.id === "status") return !!c.statusId;
 				return !!c.customLayers[layer.id];
 			});
@@ -854,16 +1006,32 @@ export default function App() {
 												if (match) cellVal = match.name;
 											} else if (
 												layer.id === "biomarker" &&
-												combo.biomarkerId
+												((combo.biomarkerIds &&
+													combo.biomarkerIds.length >
+														0) ||
+													combo.biomarkerId)
 											) {
-												const match = (
-													labels.biomarker || []
-												).find(
-													(l) =>
-														l.id ===
-														combo.biomarkerId,
-												);
-												if (match) cellVal = match.name;
+												const bIds =
+													combo.biomarkerIds ||
+													(combo.biomarkerId
+														? [combo.biomarkerId]
+														: []);
+												const matches = bIds
+													.map((id: string) => {
+														const match = (
+															labels.biomarker ||
+															[]
+														).find(
+															(l) => l.id === id,
+														);
+														return match
+															? match.name
+															: "";
+													})
+													.filter(Boolean);
+												if (matches.length > 0)
+													cellVal =
+														matches.join(" + ");
 											} else if (
 												layer.id === "status" &&
 												combo.statusId
@@ -1195,7 +1363,7 @@ export default function App() {
 		if (selectedWells.size === 0) return;
 		saveToHistory(wells);
 
-		// Check if ALL selected wells (restricted to active format) currently have exactly this label/treatment
+		// Check if ALL selected wells (restricted to active format) currently have this label/treatment
 		const activeSelectedWells = Array.from(selectedWells).filter(
 			(wellKey) => isWellInActiveFormat(wellKey),
 		);
@@ -1209,6 +1377,12 @@ export default function App() {
 						return treat.length === 1 && treat[0] === labelId;
 					}
 					return treat === labelId;
+				} else if (activeLayerId === "biomarker") {
+					const bio = well?.biomarker;
+					if (Array.isArray(bio)) {
+						return bio.includes(labelId);
+					}
+					return bio === labelId;
 				} else {
 					return well?.[activeLayerId] === labelId;
 				}
@@ -1254,6 +1428,36 @@ export default function App() {
 							treatment: currentTreatments,
 						};
 					}
+				} else if (activeLayerId === "biomarker") {
+					let currentBiomarkers = next[wellKey].biomarker;
+					if (!Array.isArray(currentBiomarkers)) {
+						currentBiomarkers = currentBiomarkers
+							? [currentBiomarkers]
+							: [];
+					}
+
+					if (shouldClear) {
+						// Remove this biomarker from the selection
+						currentBiomarkers = currentBiomarkers.filter(
+							(b: string) => b !== labelId,
+						);
+					} else {
+						// Add this biomarker if not present
+						if (!currentBiomarkers.includes(labelId)) {
+							currentBiomarkers = [
+								...currentBiomarkers,
+								labelId,
+							];
+						}
+					}
+
+					const updatedWell = { ...next[wellKey] };
+					if (currentBiomarkers.length > 0) {
+						updatedWell.biomarker = currentBiomarkers;
+					} else {
+						delete updatedWell.biomarker;
+					}
+					next[wellKey] = updatedWell;
 				} else {
 					if (shouldClear) {
 						const updatedWell = { ...next[wellKey] };
@@ -1391,6 +1595,20 @@ export default function App() {
 							...next[wellKey],
 							treatment: currentTreatments,
 						};
+					} else if (activeLayerId === "biomarker") {
+						let currentBiomarkers = next[wellKey].biomarker;
+						if (!Array.isArray(currentBiomarkers)) {
+							currentBiomarkers = currentBiomarkers
+								? [currentBiomarkers]
+								: [];
+						}
+						if (!currentBiomarkers.includes(newId)) {
+							currentBiomarkers = [...currentBiomarkers, newId];
+						}
+						next[wellKey] = {
+							...next[wellKey],
+							biomarker: currentBiomarkers,
+						};
 					} else {
 						next[wellKey] = {
 							...next[wellKey],
@@ -1507,6 +1725,23 @@ export default function App() {
 							next[key].treatment = next[key].treatment.filter(
 								(t) => t !== labelId,
 							);
+						}
+					} else if (activeLayerId === "biomarker") {
+						if (Array.isArray(next[key].biomarker)) {
+							const filtered = next[key].biomarker.filter(
+								(b: string) => b !== labelId,
+							);
+							const updated = { ...next[key] };
+							if (filtered.length > 0) {
+								updated.biomarker = filtered;
+							} else {
+								delete updated.biomarker;
+							}
+							next[key] = updated;
+						} else if (next[key].biomarker === labelId) {
+							const updated = { ...next[key] };
+							delete updated.biomarker;
+							next[key] = updated;
 						}
 					} else if (next[key][activeLayerId] === labelId) {
 						const updated = { ...next[key] };
@@ -2177,64 +2412,167 @@ export default function App() {
 													hoveredWell === wellKey;
 
 												const overlays = [];
-												layers
-													.slice(1)
-													.forEach((layer) => {
-														if (
-															visibleLayers[
+												// Treatment & Dose UX remain exactly as before: dose text rendered inside well
+												if (visibleLayers.dose) {
+													const assignedDoseId =
+														assignedWellMetadata.dose;
+													const matchedDoseLabel =
+														assignedDoseId
+															? (
+																	labels.dose ||
+																	[]
+																).find(
+																	(l: any) =>
+																		l.id ===
+																		assignedDoseId,
+																)
+															: null;
+													if (matchedDoseLabel) {
+														const displayText =
+															matchedDoseLabel.value !==
+															undefined
+																? formatDoseDisplay(
+																		matchedDoseLabel.value,
+																		matchedDoseLabel.unit ||
+																			"µM",
+																		1,
+																	)
+																: getAbbreviation(
+																		matchedDoseLabel.name,
+																	);
+														overlays.push({
+															layerId: "dose",
+															text: displayText,
+														});
+													}
+												}
+
+												// Check orthogonal neighbors for contiguous secondary monochrome territory shading
+												const halfGap =
+													plateFormat === "96"
+														? 4
+														: 2;
+
+												let secondaryLayerName:
+													| string
+													| null = null;
+												let secondaryLayerId:
+													| string
+													| null = null;
+
+												for (const layer of layers.slice(
+													1,
+												)) {
+													if (
+														layer.id !== "dose" &&
+														visibleLayers[layer.id]
+													) {
+														const assignedVal =
+															assignedWellMetadata[
 																layer.id
-															]
-														) {
-															const assignedLabelId =
-																assignedWellMetadata[
-																	layer.id
-																];
-															const matchedLabel =
-																assignedLabelId
-																	? (
-																			labels[
-																				layer
-																					.id
-																			] ||
-																			[]
-																		).find(
-																			(
-																				l,
-																			) =>
-																				l.id ===
-																				assignedLabelId,
-																		)
-																	: null;
-															if (matchedLabel) {
-																let displayText =
-																	matchedLabel.name;
-																if (
-																	layer.id ===
-																		"dose" &&
-																	matchedLabel.value !==
-																		undefined
-																) {
-																	displayText =
-																		formatDoseDisplay(
-																			matchedLabel.value,
-																			matchedLabel.unit ||
-																				"µM",
-																			1,
-																		);
-																} else {
-																	displayText =
-																		getAbbreviation(
-																			displayText,
-																		);
+															];
+														if (assignedVal) {
+															if (layer.id === "biomarker") {
+																const bIds = Array.isArray(assignedVal)
+																	? assignedVal
+																	: [assignedVal];
+																if (bIds.length > 0) {
+																	const matchedNames = bIds
+																		.map((id: string) => {
+																			const m = (labels.biomarker || []).find((l: any) => l.id === id);
+																			return m ? getAbbreviation(m.name) : "";
+																		})
+																		.filter(Boolean);
+																	if (matchedNames.length > 0) {
+																		secondaryLayerName = matchedNames.join(" + ");
+																		secondaryLayerId = layer.id;
+																		break;
+																	}
 																}
-																overlays.push({
-																	layerId:
-																		layer.id,
-																	text: displayText,
-																});
+															} else {
+																const matchedLabel =
+																	(
+																		labels[
+																			layer.id
+																		] || []
+																	).find(
+																		(l: any) =>
+																			l.id ===
+																			assignedVal,
+																	);
+																if (matchedLabel) {
+																	secondaryLayerName =
+																		getAbbreviation(
+																			matchedLabel.name,
+																		);
+																	secondaryLayerId =
+																		layer.id;
+																	break;
+																}
 															}
 														}
-													});
+													}
+												}
+
+												const hasSameTerritory = (
+													nr: number,
+													nc: number,
+												) => {
+													if (
+														!secondaryLayerId ||
+														nr < 0 ||
+														nr >= rows.length ||
+														nc < 0 ||
+														nc >= cols.length
+													)
+														return false;
+													const neighborKey = `${rows[nr]}${cols[nc]}`;
+													const nMeta =
+														wells[neighborKey] ||
+														{};
+													if (secondaryLayerId === "biomarker") {
+														const aVal = assignedWellMetadata.biomarker;
+														const nVal = nMeta.biomarker;
+														const aList = (Array.isArray(aVal) ? aVal : aVal ? [aVal] : []).slice().sort();
+														const nList = (Array.isArray(nVal) ? nVal : nVal ? [nVal] : []).slice().sort();
+														return JSON.stringify(aList) === JSON.stringify(nList);
+													}
+													return (
+														nMeta[
+															secondaryLayerId
+														] ===
+														assignedWellMetadata[
+															secondaryLayerId
+														]
+													);
+												};
+
+												const terrTop =
+													hasSameTerritory(
+														rIdx - 1,
+														cIdx,
+													);
+												const terrBottom =
+													hasSameTerritory(
+														rIdx + 1,
+														cIdx,
+													);
+												const terrLeft =
+													hasSameTerritory(
+														rIdx,
+														cIdx - 1,
+													);
+												const terrRight =
+													hasSameTerritory(
+														rIdx,
+														cIdx + 1,
+													);
+
+												// Show the label badge ONLY on the top-leftmost corner well of the contiguous group
+												const isTerritoryAnchor =
+													secondaryLayerId &&
+													!terrTop &&
+													!terrLeft;
 
 												return (
 													<div
@@ -2257,11 +2595,53 @@ export default function App() {
 															setHoveredWell(null)
 														}
 													>
+														{/* Monochrome shade outside the circular well for secondary metadata (no border, seamless across gaps) */}
+														{secondaryLayerId && (
+															<div
+																className="absolute pointer-events-none transition-all duration-150 z-0 bg-slate-900/10"
+																style={{
+																	top: terrTop
+																		? `-${halfGap}px`
+																		: "0px",
+																	bottom:
+																		terrBottom
+																			? `-${halfGap}px`
+																			: "0px",
+																	left: terrLeft
+																		? `-${halfGap}px`
+																		: "0px",
+																	right: terrRight
+																		? `-${halfGap}px`
+																		: "0px",
+																	borderTopLeftRadius:
+																		!terrTop &&
+																		!terrLeft
+																			? "4px"
+																			: "0px",
+																	borderTopRightRadius:
+																		!terrTop &&
+																		!terrRight
+																			? "4px"
+																			: "0px",
+																	borderBottomLeftRadius:
+																		!terrBottom &&
+																		!terrLeft
+																			? "4px"
+																			: "0px",
+																	borderBottomRightRadius:
+																		!terrBottom &&
+																		!terrRight
+																			? "4px"
+																			: "0px",
+																}}
+															/>
+														)}
+
 														{/* Gray background box that expands to connect selections contiguously */}
 														{(isCurrentlyHovered ||
 															isHighlighted) && (
 															<div
-																className="absolute bg-[#686A67]/75 z-0 pointer-events-none rounded-none shadow-2xs animate-fadeIn"
+																className="absolute bg-[#686A67]/75 z-1 pointer-events-none rounded-none shadow-2xs animate-fadeIn"
 																style={{
 																	top:
 																		plateFormat ===
@@ -2286,6 +2666,25 @@ export default function App() {
 																}}
 															/>
 														)}
+
+														{/* Corner Badge for Secondary Metadata: positioned on the corner of the entire selection/group, not every well */}
+														{isTerritoryAnchor &&
+															secondaryLayerName && (
+																<div
+																	className="absolute top-0.5 left-0.5 z-20 pointer-events-none select-none flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/80 text-white font-mono font-medium leading-none tracking-tight shadow-xs backdrop-blur-[1px]"
+																	style={{
+																		fontSize:
+																			plateFormat ===
+																			"96"
+																				? "9px"
+																				: "7px",
+																	}}
+																>
+																	{
+																		secondaryLayerName
+																	}
+																</div>
+															)}
 
 														<div
 															className={`rounded-full transition-all flex items-center justify-center overflow-hidden border relative z-10 ${
@@ -2412,6 +2811,19 @@ export default function App() {
 																								?.name ||
 																							"";
 																					}
+																				} else if (lay.id === "biomarker") {
+																					const bVal = assignedWellMetadata.biomarker;
+																					const bIds = Array.isArray(bVal)
+																						? bVal
+																						: bVal
+																						? [bVal]
+																						: [];
+																					dispName = bIds
+																						.map((id: string) => {
+																							return (labels.biomarker || []).find((l: any) => l.id === id)?.name;
+																						})
+																						.filter(Boolean)
+																						.join(" + ");
 																				} else {
 																					const lblId =
 																						assignedWellMetadata[
@@ -3037,11 +3449,29 @@ export default function App() {
 
 											const isTreatmentLayer =
 												activeLayerId === "treatment";
+											const isBiomarkerLayer =
+												activeLayerId === "biomarker";
 											const isCheckedInCombination =
 												isTreatmentLayer &&
 												selectedCombinationLabels.has(
 													label.id,
 												);
+
+											// Check if this label is present in all currently selected wells (for active visual feedback)
+											const activeSelectedWells = Array.from(selectedWells).filter(isWellInActiveFormat);
+											const isPresentInSelection =
+												activeSelectedWells.length > 0 &&
+												activeSelectedWells.every((wKey) => {
+													const well = wells[wKey];
+													if (!well) return false;
+													if (isBiomarkerLayer) {
+														const bio = well.biomarker;
+														return Array.isArray(bio)
+															? bio.includes(label.id)
+															: bio === label.id;
+													}
+													return well[activeLayerId] === label.id;
+												});
 
 											return (
 												<div
@@ -3050,9 +3480,11 @@ export default function App() {
 														startEditingLabel(label)
 													}
 													className={`group flex items-center justify-between gap-1.5 py-2 px-3.5 rounded-xl border border-slate-800 transition-all select-none w-[140px] shrink-0 ${
-														isCheckedInCombination &&
-														isCombinationMode
-															? "bg-blue-50/50 hover:bg-[#2E59A7]"
+														(isCheckedInCombination && isCombinationMode) ||
+														(isBiomarkerLayer && isPresentInSelection)
+															? "bg-[#2E59A7] text-white shadow-xs"
+															: isPresentInSelection && !isTreatmentLayer
+															? "bg-[#2E59A7] text-white shadow-xs"
 															: "bg-slate-50/50 hover:bg-[#2E59A7]"
 													}`}
 													title="Double-click to edit this label inline"
@@ -3182,7 +3614,17 @@ export default function App() {
 																		}}
 																	/>
 																	<div className="min-w-0">
-																		<span className="text-sm font-semibold text-slate-700 block truncate group-hover:text-white transition-colors">
+																		<span
+																			className={`text-sm font-semibold block truncate group-hover:text-white transition-colors ${
+																				(isCheckedInCombination &&
+																					isCombinationMode) ||
+																				((isBiomarkerLayer ||
+																					!isTreatmentLayer) &&
+																					isPresentInSelection)
+																					? "text-white"
+																					: "text-slate-700"
+																			}`}
+																		>
 																			{
 																				label.name
 																			}
