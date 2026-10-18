@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
 	X,
-	Sparkles,
+	Zap,
 	ArrowRight,
 	ArrowDown,
 	HelpCircle,
@@ -430,7 +430,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 			<div className="flex items-center justify-between mb-3.5">
 				<div className="flex items-center gap-2.5">
 					<div className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-50 text-[#2E59A7] font-bold shadow-xs">
-						<Sparkles className="w-4 h-4" />
+						<Zap className="w-4 h-4" />
 					</div>
 					<div className="flex items-center gap-2">
 						<span className="text-sm font-bold text-slate-800">Quick Apply & Edit</span>
@@ -445,7 +445,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 						type="button"
 						onClick={() => setShowHelp(!showHelp)}
 						className="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
-						title="Quick Syntax Help"
+						aria-label="Quick Syntax Help"
 					>
 						<HelpCircle className="w-4 h-4" />
 					</button>
@@ -453,7 +453,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 						type="button"
 						onClick={onClose}
 						className="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
-						title="Close (Esc)"
+						aria-label="Close"
 					>
 						<X className="w-4 h-4" />
 					</button>
@@ -487,7 +487,6 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 							type="button"
 							onClick={handleLoadCurrentIntoInput}
 							className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50 text-[#2E59A7] hover:bg-blue-100 font-semibold text-xs transition-colors cursor-pointer border border-blue-200 shadow-2xs"
-							title="Load current condition into the input bar to edit it"
 						>
 							<Edit2 className="w-3 h-3" />
 							Load to Edit
@@ -518,16 +517,12 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 											? "bg-blue-100 text-blue-900 border-[#2E59A7] ring-2 ring-[#2E59A7]/40 shadow-xs"
 											: "bg-blue-50 hover:bg-blue-100/70 text-blue-900 border-blue-200"
 									}`}
-									title={`Click to select ${item.name} and edit dose/condition`}
 								>
 									<span className="font-bold text-slate-800">{item.name}</span>
 
 									{itemDose && (
 										<div className="inline-flex items-center gap-1 font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full text-xs border border-amber-300/80 shadow-2xs">
-											<span
-												className="flex items-center gap-1 cursor-pointer hover:underline"
-												title={`Dose: ${itemDose}`}
-											>
+											<span className="flex items-center gap-1 cursor-pointer hover:underline">
 												<span>{itemDose}</span>
 												<Edit2 className="w-2.5 h-2.5 opacity-60" />
 											</span>
@@ -538,7 +533,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 													onRemoveExistingLayer("treatment_dose", undefined, item.id);
 												}}
 												className="p-0.5 rounded-full hover:bg-amber-200 text-amber-600 hover:text-amber-900 transition-colors cursor-pointer ml-0.5"
-												title={`Clear dose for ${item.name}`}
+												aria-label={`Clear dose for ${item.name}`}
 											>
 												<X className="w-2.5 h-2.5" />
 											</button>
@@ -552,7 +547,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 											onRemoveExistingLayer("treatment", item.id);
 										}}
 										className="p-1 rounded-full hover:bg-black/10 transition-colors cursor-pointer opacity-60 hover:opacity-100 ml-0.5"
-										title={`Remove ${item.name} from selection`}
+										aria-label={`Remove ${item.name} from selection`}
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -568,7 +563,6 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 									inputRef.current?.focus();
 								}}
 								className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border shadow-2xs bg-amber-50 text-amber-900 border-amber-200 cursor-pointer hover:bg-amber-100 transition-all select-none"
-								title={`Click to edit dose: ${doseSummary}`}
 							>
 								<span>{doseSummary}</span>
 								<button
@@ -578,7 +572,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										onRemoveExistingLayer("dose");
 									}}
 									className="p-0.5 rounded-full hover:bg-black/10 transition-colors cursor-pointer opacity-60 hover:opacity-100 ml-0.5"
-									title="Remove dose from selection"
+									aria-label="Remove dose from selection"
 								>
 									<X className="w-3 h-3" />
 								</button>
@@ -601,7 +595,6 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 											setInput(`${prefix}${item.name} `);
 											inputRef.current?.focus();
 										}}
-										title={`Click to edit ${layer.layerName}: ${item.name}`}
 										className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border shadow-2xs cursor-pointer hover:opacity-90 transition-all select-none ${
 											layer.layerId === "duration"
 												? "bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100"
@@ -620,7 +613,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 												onRemoveExistingLayer(layer.layerId, item.id);
 											}}
 											className="p-0.5 rounded-full hover:bg-black/10 transition-colors cursor-pointer opacity-60 hover:opacity-100 ml-0.5"
-											title={`Remove ${item.name} (${layer.layerName}) from selection`}
+											aria-label={`Remove ${item.name} (${layer.layerName}) from selection`}
 										>
 											<X className="w-3 h-3" />
 										</button>
@@ -671,7 +664,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 											type="button"
 											onClick={() => removeTreatmentItem(tItem.name)}
 											className="p-0.5 rounded-full hover:bg-blue-200 text-blue-500 hover:text-blue-800 transition-colors cursor-pointer ml-0.5"
-											title={`Remove ${tItem.name}`}
+											aria-label={`Remove ${tItem.name}`}
 										>
 											<X className="w-3 h-3" />
 										</button>
@@ -684,7 +677,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={removeTreatment}
 										className="p-0.5 rounded-full hover:bg-blue-200 text-blue-500 hover:text-blue-800 transition-colors cursor-pointer ml-0.5"
-										title="Remove treatment"
+										aria-label="Remove treatment"
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -699,7 +692,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={removeDose}
 										className="p-0.5 rounded-full hover:bg-amber-200 text-amber-600 hover:text-amber-900 transition-colors cursor-pointer ml-0.5"
-										title="Remove dose"
+										aria-label="Remove dose"
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -714,7 +707,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={toggleDirection}
 										className="inline-flex items-center gap-0.5 bg-white px-2 py-0.5 rounded-full text-[11px] border border-purple-200 hover:bg-purple-100 transition-colors cursor-pointer"
-										title="Click to toggle direction"
+										aria-label="Toggle dilution direction"
 									>
 										{effectiveDirection === "Right" ? (
 											<>
@@ -735,7 +728,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={removeDilution}
 										className="p-0.5 rounded-full hover:bg-purple-200 text-purple-400 hover:text-purple-700 transition-colors cursor-pointer ml-0.5"
-										title="Remove titration"
+										aria-label="Remove titration"
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -749,7 +742,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={removeDuration}
 										className="p-0.5 rounded-full hover:bg-emerald-200 text-emerald-600 hover:text-emerald-900 transition-colors cursor-pointer ml-0.5"
-										title="Remove duration"
+										aria-label="Remove duration"
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -766,7 +759,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={() => removeBiomarker(bio)}
 										className="p-0.5 rounded-full hover:bg-rose-200 text-rose-500 hover:text-rose-900 transition-colors cursor-pointer ml-0.5"
-										title={`Remove ${bio}`}
+										aria-label={`Remove ${bio}`}
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -780,7 +773,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={removeStatus}
 										className="p-0.5 rounded-full hover:bg-teal-200 text-teal-600 hover:text-teal-900 transition-colors cursor-pointer ml-0.5"
-										title="Remove status"
+										aria-label="Remove status"
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -797,7 +790,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 										type="button"
 										onClick={() => removeCustomLayer(layerId)}
 										className="p-0.5 rounded-full hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer ml-0.5"
-										title={`Remove ${layerId}`}
+										aria-label={`Remove ${layerId}`}
 									>
 										<X className="w-3 h-3" />
 									</button>
@@ -837,7 +830,7 @@ export const QuickMetadataPopover: React.FC<QuickMetadataPopoverProps> = ({
 									: "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
 							}`}
 						>
-							<Sparkles className="w-4 h-4" />
+							<Zap className="w-4 h-4" />
 							<span>
 								{activeTargetTreatment && parsed.dose
 									? `Save Dose for ${activeTargetTreatment.name}`

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, CheckSquare, Square, Layers, Sparkles } from "lucide-react";
+import { X, CheckSquare, Square, Layers, SlidersHorizontal } from "lucide-react";
 
 export interface PlateClipboard {
 	sourceWells: string[];
@@ -12,6 +12,7 @@ export interface PlateClipboard {
 		colCount: number;
 	};
 	wellsData: Record<string, any>;
+	isCut?: boolean;
 }
 
 interface PasteSpecialModalProps {
@@ -251,7 +252,7 @@ export const PasteSpecialModal: React.FC<PasteSpecialModalProps> = ({
 									: "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
 							}`}
 						>
-							<Sparkles className="w-4 h-4" />
+							<SlidersHorizontal className="w-4 h-4" />
 							<span>Paste ({selectedLayers.size} Layers)</span>
 						</button>
 					</div>

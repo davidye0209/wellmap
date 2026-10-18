@@ -33,6 +33,9 @@ import {
 	Copy,
 	ClipboardPaste,
 	SlidersHorizontal,
+	Zap,
+	Scissors,
+	GripVertical,
 } from "lucide-react";
 
 /**
@@ -285,6 +288,8 @@ export default function App() {
 		new Set<string>(),
 	);
 	const [clipboard, setClipboard] = useState<PlateClipboard | null>(null);
+	const [draggedLabelId, setDraggedLabelId] = useState<string | null>(null);
+	const [dragOverLabelId, setDragOverLabelId] = useState<string | null>(null);
 	const [isPasteSpecialOpen, setIsPasteSpecialOpen] = useState(false);
 	const [isQuickPopoverOpen, setIsQuickPopoverOpen] = useState(false);
 	const [hoveredWell, setHoveredWell] = useState<string | null>(null);
@@ -1315,6 +1320,7 @@ export default function App() {
 				colCount,
 			},
 			wellsData: copiedWellsData,
+			isCut: false,
 		};
 
 		setClipboard(newClipboard);
@@ -1324,12 +1330,60 @@ export default function App() {
 		setTimeout(() => setSaveNotification(null), 2500);
 	};
 
+	const handleCutSelection = () => {
+		const validWells = Array.from(selectedWells).filter(isWellInActiveFormat);
+		if (validWells.length === 0) return;
+
+		let minR = Infinity,
+			maxR = -Infinity;
+		let minC = Infinity,
+			maxC = -Infinity;
+
+		const copiedWellsData: Record<string, any> = {};
+
+		validWells.forEach((w) => {
+			const { r, c } = getWellCoords(w);
+			if (r < minR) minR = r;
+			if (r > maxR) maxR = r;
+			if (c < minC) minC = c;
+			if (c > maxC) maxC = c;
+			if (wells[w]) {
+				copiedWellsData[w] = JSON.parse(JSON.stringify(wells[w]));
+			} else {
+				copiedWellsData[w] = {};
+			}
+		});
+
+		const rowCount = maxR - minR + 1;
+		const colCount = maxC - minC + 1;
+
+		const newClipboard: PlateClipboard = {
+			sourceWells: validWells,
+			geometry: {
+				minR,
+				maxR,
+				minC,
+				maxC,
+				rowCount,
+				colCount,
+			},
+			wellsData: copiedWellsData,
+			isCut: true,
+		};
+
+		setClipboard(newClipboard);
+		setSaveNotification(
+			`Cut ${validWells.length} well${validWells.length > 1 ? "s" : ""} (paste into target wells to move)`,
+		);
+		setTimeout(() => setSaveNotification(null), 2500);
+	};
+
 	const handlePasteSelection = (options?: {
 		layersToCopy?: string[];
 		mode?: "merge" | "overwrite";
 	}) => {
 		if (!clipboard) {
-			setSaveNotification("Clipboard is empty. Copy wells first.");
+			setSaveNotification("Clipboard is empty. Copy or cut wells first.");
 			setTimeout(() => setSaveNotification(null), 2500);
 			return;
 		}
@@ -1341,7 +1395,10 @@ export default function App() {
 			return;
 		}
 
-		const layersToCopy = options?.layersToCopy || ["treatment", "dose"];
+		const isCut = !!clipboard.isCut;
+		const layersToCopy =
+			options?.layersToCopy ||
+			(isCut ? layers.map((l) => l.id) : ["treatment", "dose"]);
 		const mode = options?.mode || "overwrite";
 
 		saveToHistory(wells);
@@ -1413,6 +1470,23 @@ export default function App() {
 
 		setWells((prev) => {
 			const next = { ...prev };
+
+			// If moving from a cut action, clear the copied layers from cut source wells first
+			if (isCut) {
+				clipboard.sourceWells.forEach((srcKey) => {
+					if (next[srcKey]) {
+						const cleanedWell = { ...next[srcKey] };
+						layersToCopy.forEach((layerId) => {
+							delete cleanedWell[layerId];
+						});
+						if (layersToCopy.includes("dose")) {
+							delete cleanedWell.treatmentDoses;
+						}
+						next[srcKey] = cleanedWell;
+					}
+				});
+			}
+
 			targetWellsToUpdate.forEach(({ targetKey, srcKey }) => {
 				const srcData = clipboard.wellsData[srcKey] || {};
 				const currentWell = next[targetKey] ? { ...next[targetKey] } : {};
@@ -1501,9 +1575,16 @@ export default function App() {
 			);
 		}
 
-		setSaveNotification(
-			`Pasted ${layersToCopy.join(" + ")} (${mode}) to ${targetWellsToUpdate.length} wells`,
-		);
+		if (isCut) {
+			setClipboard(null);
+			setSaveNotification(
+				`Moved metadata from ${clipboard.sourceWells.length} well${clipboard.sourceWells.length > 1 ? "s" : ""} to ${targetWellsToUpdate.length} well${targetWellsToUpdate.length > 1 ? "s" : ""}`,
+			);
+		} else {
+			setSaveNotification(
+				`Pasted ${layersToCopy.join(" + ")} (${mode}) to ${targetWellsToUpdate.length} wells`,
+			);
+		}
 		setTimeout(() => setSaveNotification(null), 2500);
 	};
 
@@ -1539,7 +1620,10 @@ export default function App() {
 
 			const isCmdOrCtrl = e.metaKey || e.ctrlKey;
 
-			if (isCmdOrCtrl && e.key.toLowerCase() === "c") {
+			if (isCmdOrCtrl && e.key.toLowerCase() === "x") {
+				e.preventDefault();
+				handleCutSelection();
+			} else if (isCmdOrCtrl && e.key.toLowerCase() === "c") {
 				e.preventDefault();
 				handleCopySelection();
 			} else if (isCmdOrCtrl && e.shiftKey && e.key.toLowerCase() === "v") {
@@ -2882,6 +2966,29 @@ export default function App() {
 		setTimeout(() => setSaveNotification(null), 2500);
 	};
 
+	const handleReorderLabels = (
+		sourceId: string,
+		targetId: string,
+		layerId = activeLayerId,
+	) => {
+		if (!sourceId || !targetId || sourceId === targetId) return;
+		setLabels((prev) => {
+			const currentList = prev[layerId] || [];
+			const sourceIdx = currentList.findIndex((l) => l.id === sourceId);
+			const targetIdx = currentList.findIndex((l) => l.id === targetId);
+			if (sourceIdx === -1 || targetIdx === -1) return prev;
+
+			const nextList = [...currentList];
+			const [moved] = nextList.splice(sourceIdx, 1);
+			nextList.splice(targetIdx, 0, moved);
+
+			return {
+				...prev,
+				[layerId]: nextList,
+			};
+		});
+	};
+
 	const activeLabelsList = labels[activeLayerId] || [];
 
 	// Count active wells only if they exist in the current visible plate format
@@ -3209,7 +3316,7 @@ export default function App() {
 
 					<label
 						className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all px-5 py-2 rounded-full font-medium cursor-pointer"
-						title="Upload an exported layout JSON or Tecan D300 XML file"
+						aria-label="Upload an exported layout JSON or Tecan D300 XML file"
 					>
 						<FileText className="h-4 w-4 text-white" />
 						Import
@@ -3224,7 +3331,7 @@ export default function App() {
 					<button
 						onClick={handleSaveMapLocally}
 						className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all px-5 py-2 rounded-full font-medium cursor-pointer"
-						title="Save current plate map locally in your browser"
+						aria-label="Save current plate map locally"
 					>
 						<Save className="h-4 w-4 text-white" />
 						Save
@@ -3233,7 +3340,7 @@ export default function App() {
 					<button
 						onClick={() => setIsExportModalOpen(true)}
 						className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all px-5 py-2 rounded-full font-medium cursor-pointer"
-						title="Export plate map snapshot & summary table"
+						aria-label="Export plate map snapshot & summary table"
 					>
 						<Download className="h-4 w-4 text-white" />
 						Export
@@ -3288,95 +3395,100 @@ export default function App() {
 								<button
 									onClick={() => setIsQuickPopoverOpen((prev) => !prev)}
 									disabled={selectedWells.size === 0}
-									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-5 py-2 ${
+									className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
 										selectedWells.size > 0
-											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm hover:scale-105 active:scale-95"
 											: "bg-slate-100 text-slate-400 cursor-not-allowed"
 									}`}
-									title="Quickly apply or edit condition on selection (Press Enter or click)"
+									aria-label="Quick Apply"
 								>
-									<Sparkles className="h-4 w-4" />
-									Quick Apply
+									<Zap className="h-4 w-4" />
+								</button>
+
+								<button
+									onClick={handleCutSelection}
+									disabled={selectedWells.size === 0}
+									className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
+										selectedWells.size > 0
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm hover:scale-105 active:scale-95"
+											: "bg-slate-100 text-slate-400 cursor-not-allowed"
+									}`}
+									aria-label="Cut"
+								>
+									<Scissors className="h-4 w-4" />
 								</button>
 
 								<button
 									onClick={handleCopySelection}
 									disabled={selectedWells.size === 0}
-									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-4 py-2 ${
+									className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
 										selectedWells.size > 0
-											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm hover:scale-105 active:scale-95"
 											: "bg-slate-100 text-slate-400 cursor-not-allowed"
 									}`}
-									title="Copy selected wells (Cmd/Ctrl+C)"
+									aria-label="Copy"
 								>
 									<Copy className="h-4 w-4" />
-									Copy
 								</button>
 
 								<button
 									onClick={() => handlePasteSelection()}
 									disabled={!clipboard || selectedWells.size === 0}
-									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-4 py-2 ${
+									className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
 										clipboard && selectedWells.size > 0
-											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm hover:scale-105 active:scale-95"
 											: "bg-slate-100 text-slate-400 cursor-not-allowed"
 									}`}
-									title="Paste Treatment + Dose (Cmd/Ctrl+V)"
+									aria-label="Paste"
 								>
 									<ClipboardPaste className="h-4 w-4" />
-									Paste
 								</button>
 
 								<button
 									onClick={() => setIsPasteSpecialOpen(true)}
 									disabled={!clipboard || selectedWells.size === 0}
-									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-4 py-2 ${
+									className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
 										clipboard && selectedWells.size > 0
-											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm hover:scale-105 active:scale-95"
 											: "bg-slate-100 text-slate-400 cursor-not-allowed"
 									}`}
-									title="Paste Special: Choose metadata layers & mode (Cmd/Ctrl+Shift+V)"
+									aria-label="Paste Special"
 								>
 									<SlidersHorizontal className="h-4 w-4" />
-									Paste Special...
 								</button>
 
 								<button
 									onClick={handleClearSelectedWells}
 									disabled={selectedWells.size === 0}
-									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-5 py-2 ${
+									className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
 										selectedWells.size > 0
-											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer"
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm hover:scale-105 active:scale-95"
 											: "bg-slate-100 text-slate-400 cursor-not-allowed"
 									}`}
+									aria-label="Clear selected wells"
 								>
-									<Trash2
-										className={`h-4 w-4 ${selectedWells.size > 0 ? "text-white" : "text-slate-400"}`}
-									/>
-									Clear
+									<Trash2 className="h-4 w-4" />
 								</button>
 
 								<button
 									onClick={handleClearAllWells}
-									className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all px-5 py-2 rounded-full font-medium cursor-pointer"
+									className="flex items-center justify-center w-9 h-9 bg-[#2E59A7] hover:bg-[#1E3F78] text-white transition-all rounded-full cursor-pointer shadow-sm hover:scale-105 active:scale-95"
+									aria-label="Clear all wells"
 								>
-									<X className="h-4 w-4 text-white" />
-									Clear All
+									<RotateCcw className="h-4 w-4" />
 								</button>
 
 								<button
 									onClick={handleUndo}
 									disabled={history.length === 0}
-									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-5 py-2 ${
+									className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
 										history.length > 0
-											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer"
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm hover:scale-105 active:scale-95"
 											: "bg-slate-100 text-slate-400 cursor-not-allowed"
 									}`}
+									aria-label="Undo"
 								>
-									<Undo
-										className={`h-4 w-4 ${history.length > 0 ? "text-white" : "text-slate-400"}`}
-									/>
-									Undo
+									<Undo className="h-4 w-4" />
 								</button>
 							</div>
 						</div>
@@ -3429,7 +3541,7 @@ export default function App() {
 											key={`col-${c}`}
 											onClick={() => selectCol(c)}
 											className="text-center text-sm font-sans font-semibold text-slate-800 hover:text-blue-600 transition-colors py-1 hover:bg-slate-100 rounded"
-											title={`Select Column ${c}`}
+											aria-label={`Select Column ${c}`}
 										>
 											{c}
 										</button>
@@ -3444,7 +3556,7 @@ export default function App() {
 													selectRow(rowLabel)
 												}
 												className="text-center text-sm font-sans font-semibold text-slate-800 hover:text-blue-600 transition-colors h-full flex items-center justify-center hover:bg-slate-100 rounded"
-												title={`Select Row ${rowLabel}`}
+												aria-label={`Select Row ${rowLabel}`}
 											>
 												{rowLabel}
 											</button>
@@ -3454,6 +3566,9 @@ export default function App() {
 												const wellKey = `${rowLabel}${colNum}`;
 												const assignedWellMetadata =
 													wells[wellKey] || {};
+												const isCutSource =
+													clipboard?.isCut &&
+													clipboard.sourceWells.includes(wellKey);
 
 												let treatmentIds =
 													assignedWellMetadata.treatment;
@@ -3786,7 +3901,11 @@ export default function App() {
 																"96"
 																	? "w-[90%] h-[90%]"
 																	: "w-[95%] h-[95%]"
-															} border-slate-300`}
+															} ${
+																isCutSource
+																	? "border-blue-500 ring-2 ring-blue-500 ring-offset-1 ring-dashed opacity-70 animate-pulse"
+																	: "border-slate-300"
+															}`}
 															style={getWellBackgroundStyle(
 																treatmentIds,
 																doseIntensity,
@@ -3827,9 +3946,6 @@ export default function App() {
 																							? "text-xs md:text-[13px]"
 																							: "text-[9px] md:text-[11px]"
 																					}`}
-																					title={
-																						ov.text
-																					}
 																				>
 																					{
 																						ov.text
@@ -4047,11 +4163,47 @@ export default function App() {
 									treatmentLegendList.map((legendItem) => (
 										<div
 											key={legendItem.id}
-											className="flex items-center gap-3 animate-fadeIn"
+											draggable
+											onDragStart={(e) => {
+												e.dataTransfer.setData("text/plain", legendItem.id);
+												e.dataTransfer.effectAllowed = "move";
+												setDraggedLabelId(legendItem.id);
+											}}
+											onDragOver={(e) => {
+												e.preventDefault();
+												e.dataTransfer.dropEffect = "move";
+												if (dragOverLabelId !== legendItem.id) {
+													setDragOverLabelId(legendItem.id);
+												}
+											}}
+											onDragLeave={() => {
+												if (dragOverLabelId === legendItem.id) {
+													setDragOverLabelId(null);
+												}
+											}}
+											onDrop={(e) => {
+												e.preventDefault();
+												if (draggedLabelId) {
+													handleReorderLabels(draggedLabelId, legendItem.id, "treatment");
+												}
+												setDraggedLabelId(null);
+												setDragOverLabelId(null);
+											}}
+											onDragEnd={() => {
+												setDraggedLabelId(null);
+												setDragOverLabelId(null);
+											}}
+											className={`group flex items-center gap-2.5 px-2 py-1.5 rounded-xl border transition-all cursor-grab active:cursor-grabbing select-none ${
+												dragOverLabelId === legendItem.id
+													? "border-blue-500 bg-blue-50/70 shadow-xs ring-2 ring-blue-300"
+													: "border-transparent hover:border-slate-200 hover:bg-slate-100/70"
+											}`}
+											aria-label={`Drag to reorder ${legendItem.name}`}
 										>
+											<GripVertical className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-500 shrink-0" />
 											{/* Color Circle preview matching style from image_9ee6e3.jpg */}
 											<div
-												className="w-7 h-7 rounded-full shrink-0 border border-slate-200/30 shadow-2xs"
+												className="w-6 h-6 rounded-full shrink-0 border border-slate-200/40 shadow-2xs"
 												style={{
 													backgroundColor:
 														legendItem.color,
@@ -4081,7 +4233,7 @@ export default function App() {
 								<button
 									onClick={() => setIsAddingLayer(true)}
 									className="flex items-center gap-1 text-sm text-[#2E59A7] hover:text-[#1E3F78] font-bold transition-colors cursor-pointer select-none"
-									title="Add custom metadata layer"
+									aria-label="Add custom metadata layer"
 								>
 									<span>+ Layer</span>
 								</button>
@@ -4158,7 +4310,7 @@ export default function App() {
 											)
 										}
 										className="p-1.5 text-slate-400 hover:text-red-500 rounded-full bg-[#f4f4f5] hover:bg-red-50 transition-colors cursor-pointer shrink-0"
-										title="Delete active custom layer"
+										aria-label="Delete active custom layer"
 									>
 										<Trash2 className="h-3.5 w-3.5" />
 									</button>
@@ -4573,10 +4725,44 @@ export default function App() {
 													onDoubleClick={() =>
 														startEditingLabel(label)
 													}
-													className={`group flex items-center justify-between gap-1.5 py-2 px-3.5 rounded-xl border border-slate-800 transition-all select-none shrink-0 ${
+													draggable={!isEditing}
+													onDragStart={(e) => {
+														e.dataTransfer.setData("text/plain", label.id);
+														e.dataTransfer.effectAllowed = "move";
+														setDraggedLabelId(label.id);
+													}}
+													onDragOver={(e) => {
+														e.preventDefault();
+														e.dataTransfer.dropEffect = "move";
+														if (dragOverLabelId !== label.id) {
+															setDragOverLabelId(label.id);
+														}
+													}}
+													onDragLeave={() => {
+														if (dragOverLabelId === label.id) {
+															setDragOverLabelId(null);
+														}
+													}}
+													onDrop={(e) => {
+														e.preventDefault();
+														if (draggedLabelId) {
+															handleReorderLabels(draggedLabelId, label.id, activeLayerId);
+														}
+														setDraggedLabelId(null);
+														setDragOverLabelId(null);
+													}}
+													onDragEnd={() => {
+														setDraggedLabelId(null);
+														setDragOverLabelId(null);
+													}}
+													className={`group flex items-center justify-between gap-1 py-2 px-2.5 rounded-xl border transition-all select-none shrink-0 ${
 														isEditing
-															? "w-full max-w-[280px] bg-white ring-2 ring-[#2E59A7] shadow-sm flex-col items-stretch gap-2.5 p-3"
-															: `w-[140px] ${
+															? "w-full max-w-[280px] bg-white ring-2 ring-[#2E59A7] shadow-sm flex-col items-stretch gap-2.5 p-3 border-slate-800"
+															: `w-[145px] cursor-grab active:cursor-grabbing ${
+																	dragOverLabelId === label.id
+																		? "border-[#2E59A7] ring-2 ring-[#2E59A7] shadow-md scale-[1.02]"
+																		: "border-slate-800"
+															  } ${
 																	(isCheckedInCombination && isCombinationMode) ||
 																	(isBiomarkerLayer && isPresentInSelection)
 																		? "bg-[#2E59A7] text-white shadow-xs"
@@ -4585,7 +4771,6 @@ export default function App() {
 																		: "bg-slate-50/50 hover:bg-[#2E59A7]"
 															  }`
 													}`}
-													title={isEditing ? undefined : "Double-click to edit this label inline"}
 												>
 													{isEditing ? (
 														<div
@@ -4603,7 +4788,7 @@ export default function App() {
 																	style={{
 																		backgroundColor: editingColor,
 																	}}
-																	title="Click to pick a custom color"
+																	aria-label="Click to pick a custom color"
 																>
 																	<input
 																		type="color"
@@ -4632,7 +4817,7 @@ export default function App() {
 																		handleSaveLabelEdit(label.id)
 																	}
 																	className="p-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg cursor-pointer shrink-0 transition-colors"
-																	title="Save changes (Enter)"
+																	aria-label="Save changes"
 																>
 																	<Check className="h-3.5 w-3.5" />
 																</button>
@@ -4642,7 +4827,7 @@ export default function App() {
 																		setEditingLabelId(null)
 																	}
 																	className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg cursor-pointer shrink-0 transition-colors"
-																	title="Cancel (Esc)"
+																	aria-label="Cancel"
 																>
 																	<X className="h-3.5 w-3.5" />
 																</button>
@@ -4662,14 +4847,15 @@ export default function App() {
 																				: "border-slate-200"
 																		}`}
 																		style={{ backgroundColor: c }}
-																		title={c}
+																		aria-label={`Select color ${c}`}
 																	/>
 																))}
 															</div>
 														</div>
 													) : (
 														<>
-															<div className="flex items-center gap-2 flex-1 min-w-0">
+															<div className="flex items-center gap-1.5 flex-1 min-w-0">
+																<GripVertical className="h-3.5 w-3.5 text-slate-400 group-hover:text-white/80 shrink-0 cursor-grab" />
 																{isTreatmentLayer &&
 																	isCombinationMode && (
 																		<button
@@ -4697,8 +4883,8 @@ export default function App() {
 																			label.id,
 																		)
 																	}
-																	className="flex items-center gap-2 text-left min-w-0 flex-1 hover:opacity-85"
-																	title={`Assign "${label.name}" to selection`}
+																	className="flex items-center gap-1.5 text-left min-w-0 flex-1 hover:opacity-85"
+																	aria-label={`Assign "${label.name}" to selection`}
 																>
 																	<div
 																		className="w-4 h-4 rounded-full shrink-0 shadow-inner border border-slate-200"
@@ -4734,7 +4920,7 @@ export default function App() {
 																	)
 																}
 																className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 group-hover:text-white hover:text-red-200 rounded transition-opacity shrink-0 ml-0.5"
-																title="Delete label"
+																aria-label="Delete label"
 															>
 																<X className="h-3 w-3" />
 															</button>
@@ -4803,7 +4989,7 @@ export default function App() {
 													style={{
 														backgroundColor: color,
 													}}
-													title={color}
+													aria-label={`Select color ${color}`}
 												/>
 											))}
 										</div>
@@ -4944,7 +5130,7 @@ export default function App() {
 								<button
 									onClick={handleExportTecanXml}
 									className="flex items-center gap-1.5 text-xs bg-[#2E59A7] hover:bg-[#1E3F78] text-white font-semibold px-4 py-2 rounded-full transition-all cursor-pointer shadow-xs"
-									title="Download official XML Spreadsheet protocol compatible with Tecan D300e software"
+									aria-label="Download official XML Spreadsheet protocol compatible with Tecan D300e software"
 								>
 									<FileText className="h-3.5 w-3.5 text-white" />
 									Tecan D300e XML Protocol
@@ -4953,7 +5139,7 @@ export default function App() {
 								<button
 									onClick={handleExportTecanCsv}
 									className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-900 text-white font-semibold px-4 py-2 rounded-full transition-all cursor-pointer shadow-xs"
-									title="Download CSV dispense list compatible with Tecan D300e"
+									aria-label="Download CSV dispense list compatible with Tecan D300e"
 								>
 									<FileText className="h-3.5 w-3.5 text-white" />
 									Tecan D300e CSV
@@ -4962,7 +5148,7 @@ export default function App() {
 								<button
 									onClick={handleExportData}
 									className="flex items-center gap-1.5 text-xs bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold px-4 py-2 rounded-full transition-all cursor-pointer"
-									title="Download native WellMap JSON layout"
+									aria-label="Download native WellMap JSON layout"
 								>
 									<FileText className="h-3.5 w-3.5 text-slate-500" />
 									JSON Layout
