@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { toPng } from "html-to-image";
 import { parseLayoutFile } from "./tecanParser";
+import { QuickMetadataPopover } from "./QuickMetadataPopover";
+import type { ParsedQuickCondition } from "./quickMetadataParser";
 import {
 	Plus,
 	RotateCcw,
@@ -273,6 +275,7 @@ export default function App() {
 	const [selectedWells, setSelectedWells] = useState<Set<string>>(
 		new Set<string>(),
 	);
+	const [isQuickPopoverOpen, setIsQuickPopoverOpen] = useState(true);
 	const [hoveredWell, setHoveredWell] = useState<string | null>(null);
 	const [lastClickedWell, setLastClickedWell] = useState<{
 		r: number;
@@ -309,7 +312,7 @@ export default function App() {
 
 			// Ignore if click is on/in a well (cursor-crosshair)
 			if (target.closest('[class*="cursor-crosshair"]')) return;
-			// Ignore standard interactive components, inputs, and sidebar/preview buttons
+			// Ignore standard interactive components, inputs, quick popover, and sidebar/preview buttons
 			if (
 				target.closest("button") ||
 				target.closest("input") ||
@@ -317,6 +320,7 @@ export default function App() {
 				target.closest("textarea") ||
 				target.closest("aside") ||
 				target.closest("label") ||
+				target.closest('[data-quick-popover]') ||
 				target.closest(".interactive")
 			) {
 				return;
@@ -1311,6 +1315,7 @@ export default function App() {
 	) => {
 		e.preventDefault();
 		setIsDrawing(true);
+		setIsQuickPopoverOpen(true);
 		const startCoord = { r, c };
 		setDragStart(startCoord);
 		setDragCurrent(startCoord);
@@ -1784,6 +1789,7 @@ export default function App() {
 	};
 
 	const selectRow = (rowLabel) => {
+		setIsQuickPopoverOpen(true);
 		setSelectedWells((prev) => {
 			const next = new Set(prev);
 			const targets = [];
@@ -1806,6 +1812,7 @@ export default function App() {
 	};
 
 	const selectCol = (colNum) => {
+		setIsQuickPopoverOpen(true);
 		setSelectedWells((prev) => {
 			const next = new Set(prev);
 			const targets = [];
@@ -1960,6 +1967,332 @@ export default function App() {
 		}));
 		setWells(updatedWells);
 		setTitrationDoseInput("");
+	};
+
+	const handleApplyQuickMetadata = ({
+		parsed,
+		mode,
+		effectiveDirection,
+	}: {
+		parsed: ParsedQuickCondition;
+		mode: "add" | "replace";
+		effectiveDirection: "Right" | "Down";
+	}) => {
+		if (selectedWells.size === 0) return;
+		saveToHistory(wells);
+
+		const validSelection = Array.from(selectedWells).filter(isWellInActiveFormat);
+		if (validSelection.length === 0) return;
+
+		let updatedWells: Record<string, any> = { ...wells };
+		let updatedLabels: Record<string, any[]> = { ...labels };
+		let nextVisibleLayers = { ...visibleLayers };
+
+		// 1. Treatment
+		let treatmentLabelId: string | undefined;
+		if (parsed.treatment) {
+			const treatmentName = parsed.treatment.trim();
+			const existingTreatment = (updatedLabels.treatment || []).find(
+				(l: any) => l.name.toLowerCase() === treatmentName.toLowerCase(),
+			);
+			if (existingTreatment) {
+				treatmentLabelId = existingTreatment.id;
+			} else {
+				const colorIndex =
+					(updatedLabels.treatment?.length || 0) %
+					ACCESSIBLE_PALETTE.length;
+				treatmentLabelId = `t-${Date.now()}`;
+				const newLabel = {
+					id: treatmentLabelId,
+					name: treatmentName,
+					color: ACCESSIBLE_PALETTE[colorIndex],
+				};
+				updatedLabels.treatment = [
+					...(updatedLabels.treatment || []),
+					newLabel,
+				];
+			}
+		}
+
+		// 2. Dose & Dilution
+		const assignedDoseMap: Record<string, string> = {};
+		if (parsed.dose) {
+			nextVisibleLayers.dose = true;
+			const unit = parsed.dose.unit || "µM";
+
+			if (parsed.dilution) {
+				const startVal = parsed.dose.value || 1.0;
+				const factor = parsed.dilution.factor || 3.0;
+				const dir = effectiveDirection || "Right";
+
+				validSelection.forEach((wellKey) => {
+					const coords = getWellCoords(wellKey);
+					let stepIndex = 0;
+
+					if (dir === "Right") {
+						const sameRowWells = validSelection.filter(
+							(k) => getWellCoords(k).r === coords.r,
+						);
+						const minC = Math.min(
+							...sameRowWells.map((k) => getWellCoords(k).c),
+						);
+						stepIndex = Math.max(0, coords.c - minC);
+					} else {
+						const sameColWells = validSelection.filter(
+							(k) => getWellCoords(k).c === coords.c,
+						);
+						const minR = Math.min(
+							...sameColWells.map((k) => getWellCoords(k).r),
+						);
+						stepIndex = Math.max(0, coords.r - minR);
+					}
+
+					const stepVal = startVal / Math.pow(factor, stepIndex);
+					const formattedLabelName = formatDoseDisplay(
+						stepVal.toString(),
+						unit,
+					);
+
+					let doseLabel = (updatedLabels.dose || []).find(
+						(l: any) =>
+							l.unit === unit &&
+							(l.value === stepVal ||
+								Math.abs((l.value || 0) - stepVal) < 1e-9),
+					);
+
+					if (!doseLabel) {
+						const colorIndex =
+							(updatedLabels.dose?.length || 0) %
+							ACCESSIBLE_PALETTE.length;
+						doseLabel = {
+							id: `d-${Date.now()}-${stepVal.toFixed(6)}`,
+							name: formattedLabelName,
+							color: ACCESSIBLE_PALETTE[colorIndex],
+							value: stepVal,
+							unit,
+						};
+						updatedLabels.dose = [
+							...(updatedLabels.dose || []),
+							doseLabel,
+						];
+					}
+					assignedDoseMap[wellKey] = doseLabel.id;
+				});
+			} else {
+				const val = parsed.dose.value;
+				const formattedLabelName = parsed.dose.displayText;
+				let doseLabel = (updatedLabels.dose || []).find(
+					(l: any) =>
+						l.unit === unit &&
+						(l.value === val ||
+							Math.abs((l.value || 0) - val) < 1e-9),
+				);
+
+				if (!doseLabel) {
+					const colorIndex =
+						(updatedLabels.dose?.length || 0) %
+						ACCESSIBLE_PALETTE.length;
+					doseLabel = {
+						id: `d-${Date.now()}`,
+						name: formattedLabelName,
+						color: ACCESSIBLE_PALETTE[colorIndex],
+						value: val,
+						unit,
+					};
+					updatedLabels.dose = [
+						...(updatedLabels.dose || []),
+						doseLabel,
+					];
+				}
+
+				validSelection.forEach((wellKey) => {
+					assignedDoseMap[wellKey] = doseLabel.id;
+				});
+			}
+		}
+
+		// 3. Duration
+		let durationLabelId: string | undefined;
+		if (parsed.duration) {
+			nextVisibleLayers.duration = true;
+			const durName = parsed.duration.trim();
+			let durLabel = (updatedLabels.duration || []).find(
+				(l: any) => l.name.toLowerCase() === durName.toLowerCase(),
+			);
+			if (!durLabel) {
+				const colorIndex =
+					(updatedLabels.duration?.length || 0) %
+					ACCESSIBLE_PALETTE.length;
+				durLabel = {
+					id: `dur-${Date.now()}`,
+					name: durName,
+					color: ACCESSIBLE_PALETTE[colorIndex],
+				};
+				updatedLabels.duration = [
+					...(updatedLabels.duration || []),
+					durLabel,
+				];
+			}
+			durationLabelId = durLabel.id;
+		}
+
+		// 4. Biomarkers (Multi-biomarker support)
+		const biomarkerLabelIds: string[] = [];
+		const markersToApply =
+			parsed.biomarkers && parsed.biomarkers.length > 0
+				? parsed.biomarkers
+				: parsed.biomarker
+					? [parsed.biomarker]
+					: [];
+
+		if (markersToApply.length > 0) {
+			nextVisibleLayers.biomarker = true;
+			markersToApply.forEach((bioNameRaw) => {
+				const bioName = bioNameRaw.trim();
+				let bioLabel = (updatedLabels.biomarker || []).find(
+					(l: any) => l.name.toLowerCase() === bioName.toLowerCase(),
+				);
+				if (!bioLabel) {
+					const colorIndex =
+						(updatedLabels.biomarker?.length || 0) %
+						ACCESSIBLE_PALETTE.length;
+					bioLabel = {
+						id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+						name: bioName,
+						color: ACCESSIBLE_PALETTE[colorIndex],
+					};
+					updatedLabels.biomarker = [
+						...(updatedLabels.biomarker || []),
+						bioLabel,
+					];
+				}
+				biomarkerLabelIds.push(bioLabel.id);
+			});
+		}
+
+		// 5. Status
+		let statusLabelId: string | undefined;
+		if (parsed.status) {
+			nextVisibleLayers.status = true;
+			const statusName = parsed.status.trim();
+			let statusLabel = (updatedLabels.status || []).find(
+				(l: any) => l.name.toLowerCase() === statusName.toLowerCase(),
+			);
+			if (!statusLabel) {
+				const colorIndex =
+					(updatedLabels.status?.length || 0) %
+					ACCESSIBLE_PALETTE.length;
+				statusLabel = {
+					id: `s-${Date.now()}`,
+					name: statusName,
+					color: ACCESSIBLE_PALETTE[colorIndex],
+				};
+				updatedLabels.status = [
+					...(updatedLabels.status || []),
+					statusLabel,
+				];
+			}
+			statusLabelId = statusLabel.id;
+		}
+
+		// 6. Custom Layers
+		const customLayerLabelMap: Record<string, string> = {};
+		Object.entries(parsed.customLayers).forEach(([layerId, valName]) => {
+			nextVisibleLayers[layerId] = true;
+			const cleanVal = valName.trim();
+			let cLabel = (updatedLabels[layerId] || []).find(
+				(l: any) => l.name.toLowerCase() === cleanVal.toLowerCase(),
+			);
+			if (!cLabel) {
+				const colorIndex =
+					(updatedLabels[layerId]?.length || 0) %
+					ACCESSIBLE_PALETTE.length;
+				cLabel = {
+					id: `${layerId}-${Date.now()}`,
+					name: cleanVal,
+					color: ACCESSIBLE_PALETTE[colorIndex],
+				};
+				updatedLabels[layerId] = [
+					...(updatedLabels[layerId] || []),
+					cLabel,
+				];
+			}
+			customLayerLabelMap[layerId] = cLabel.id;
+		});
+
+		// Apply all extracted layers to wells in validSelection
+		validSelection.forEach((wellKey) => {
+			const existingWell = updatedWells[wellKey] || {};
+			const nextWell = { ...existingWell };
+
+			// Treatment: Sequential combo vs Replace
+			if (treatmentLabelId) {
+				if (mode === "add") {
+					let existingTreatments = nextWell.treatment;
+					if (!Array.isArray(existingTreatments)) {
+						existingTreatments = existingTreatments
+							? [existingTreatments]
+							: [];
+					}
+					if (!existingTreatments.includes(treatmentLabelId)) {
+						nextWell.treatment = [
+							...existingTreatments,
+							treatmentLabelId,
+						];
+					}
+				} else {
+					nextWell.treatment = [treatmentLabelId];
+				}
+			}
+
+			// Dose
+			if (assignedDoseMap[wellKey]) {
+				nextWell.dose = assignedDoseMap[wellKey];
+			}
+
+			// Duration
+			if (durationLabelId) {
+				nextWell.duration = durationLabelId;
+			}
+
+			// Biomarkers (Multi-support)
+			if (biomarkerLabelIds.length > 0) {
+				if (mode === "add") {
+					let existingBio = nextWell.biomarker;
+					if (!Array.isArray(existingBio)) {
+						existingBio = existingBio ? [existingBio] : [];
+					}
+					const merged = [...existingBio];
+					biomarkerLabelIds.forEach((bId) => {
+						if (!merged.includes(bId)) {
+							merged.push(bId);
+						}
+					});
+					nextWell.biomarker = merged;
+				} else {
+					nextWell.biomarker = biomarkerLabelIds;
+				}
+			}
+
+			// Status
+			if (statusLabelId) {
+				nextWell.status = statusLabelId;
+			}
+
+			// Custom layers
+			Object.entries(customLayerLabelMap).forEach(([layerId, labelId]) => {
+				nextWell[layerId] = labelId;
+			});
+
+			updatedWells[wellKey] = nextWell;
+		});
+
+		setLabels(updatedLabels);
+		setWells(updatedWells);
+		setVisibleLayers(nextVisibleLayers);
+		setSaveNotification(`Applied condition to ${validSelection.length} wells`);
+		setTimeout(() => setSaveNotification(null), 3000);
+		setIsQuickPopoverOpen(false);
 	};
 
 	const activeLabelsList = labels[activeLayerId] || [];
@@ -2340,6 +2673,20 @@ export default function App() {
 							{/* Action Buttons matching image_9deb29.jpg */}
 							<div className="flex items-center gap-2">
 								<button
+									onClick={() => setIsQuickPopoverOpen(true)}
+									disabled={selectedWells.size === 0}
+									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-5 py-2 ${
+										selectedWells.size > 0
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											: "bg-slate-100 text-slate-400 cursor-not-allowed"
+									}`}
+									title="Quickly apply condition to selection"
+								>
+									<Sparkles className="h-4 w-4" />
+									Quick Apply
+								</button>
+
+								<button
 									onClick={handleClearSelectedWells}
 									disabled={selectedWells.size === 0}
 									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-5 py-2 ${
@@ -2381,12 +2728,30 @@ export default function App() {
 
 						{/* Microplate Dashed Canvas container styled after image_9ee6e3.jpg, image_a0291d.png and hover behaviors of image_9f5425.png */}
 						<div
-							className={`border-2 border-dashed border-slate-300 rounded-3xl bg-slate-50/50 mx-auto transition-all ${
+							className={`border-2 border-dashed border-slate-300 rounded-3xl bg-slate-50/50 mx-auto transition-all relative ${
 								plateFormat === "96"
 									? "p-6 min-w-[760px] max-w-[960px]"
 									: "p-4 min-w-[1150px] max-w-[1450px]"
 							}`}
 						>
+							{/* Floating Quick Apply Popover HUD (Absolute Overlay - ZERO plate displacement) */}
+							{selectedWells.size > 0 && !isDrawing && isQuickPopoverOpen && (
+								<div
+									data-quick-popover="true"
+									className="absolute top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-2xl px-4 pointer-events-auto animate-fadeIn flex justify-center"
+								>
+									<QuickMetadataPopover
+										selectedWells={selectedWells}
+										plateFormat={plateFormat}
+										wells={wells}
+										layers={layers}
+										labels={labels}
+										onApply={handleApplyQuickMetadata}
+										onClose={() => setIsQuickPopoverOpen(false)}
+									/>
+								</div>
+							)}
+
 							<div ref={plateRef} className="select-none">
 								{/* Dynamically configured Column coordinates grid layout block - gap-1 tighter spacing for 384w */}
 								<div
