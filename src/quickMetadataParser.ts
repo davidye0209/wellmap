@@ -12,8 +12,15 @@ export interface ParsedDilution {
 	raw: string;
 }
 
+export interface ParsedTreatmentItem {
+	name: string;
+	dose?: ParsedDose;
+	dilution?: ParsedDilution;
+}
+
 export interface ParsedQuickCondition {
 	treatment?: string;
+	treatments?: ParsedTreatmentItem[];
 	dose?: ParsedDose;
 	dilution?: ParsedDilution;
 	duration?: string;
@@ -158,7 +165,7 @@ export function parseQuickMetadataInput(
 	// Matches patterns like `t:DrugName`, `treatment:"Drug Name"`, `d:10uM`, `dur:24h`,
 	// and multi-biomarkers like `bio:GFP,RFP,DAPI`, `if:Ki67 + Caspase-3`, `m:DAPI`, `icc:beta-tubulin`
 	let pendingDoseStr = "";
-	const prefixRegex = /\b([a-zA-Z_-]+):(?:"([^"]+)"|'([^']+)'|((?:[^\s:]+(?:\s*[+,]\s*[^\s:]+)*)|[^\s]+))/g;
+	const prefixRegex = /\b([a-zA-Z_-]+):(?:"([^"]+)"|'([^']+)'|((?:[^\s:,+]+(?:\s*[+,]\s*[^\s:,+]+)*)|[^\s]+))/g;
 	input = input.replace(prefixRegex, (_, key, qVal1, qVal2, bareVal) => {
 		const val = (qVal1 || qVal2 || bareVal || "").trim();
 		const k = key.toLowerCase();
@@ -218,45 +225,7 @@ export function parseQuickMetadataInput(
 		input = input.replace(dirMatch[0], " ");
 	}
 
-	// 3. Extract Dilution Factor: e.g. `/3`, `1:3`, `/ 3`, `/2.5`, `1:2`
-	const dilutionRegex = /(?:^|\s)(?:\/|1:)\s*(\d+(?:\.\d+)?)(?:\s|$)/;
-	const dilutionMatch = input.match(dilutionRegex);
-	if (dilutionMatch) {
-		const factor = parseFloat(dilutionMatch[1]);
-		if (!isNaN(factor) && factor > 0) {
-			parsedDilution = {
-				factor,
-				direction: explicitDirection || context.defaultDirection || "Right",
-				isInferred: !explicitDirection,
-				raw: dilutionMatch[0].trim(),
-			};
-		}
-		input = input.replace(dilutionMatch[0], " ");
-	}
-
-	// 4. Extract Dose: [Number] + [Concentration Unit]
-	// Requires standard biological units so drug codes like "ABT-737" or "BAY-876" are NOT matched!
-	const doseRegex = /(?:^|\s|\b)(\d+(?:\.\d+)?)\s*(µM|uM|μM|nM|pM|mM|M|mg\/ml|mg\/mL|ug\/ml|µg\/mL|ng\/ml|ng\/mL|%|v\/v|w\/v)(?:\s|$|[;,])/i;
-	const doseMatch = input.match(doseRegex);
-	if (doseMatch) {
-		const valNum = parseFloat(doseMatch[1]);
-		const unit = normalizeDoseUnit(doseMatch[2]);
-		parsedDose = {
-			value: valNum,
-			unit,
-			displayText: `${valNum} ${unit}`,
-			raw: doseMatch[0].trim(),
-		};
-		input = input.replace(doseMatch[0], " ");
-	}
-
-	// If a dilution was specified without an explicit direction, ensure default direction is attached
-	if (parsedDilution && !parsedDilution.direction) {
-		parsedDilution.direction = explicitDirection || context.defaultDirection || "Right";
-	}
-
-	// 5. Extract Duration: [Number] + [Time Unit]
-	// e.g. 24h, 48 hrs, 3d, 30 min, 1 week
+	// 3. Extract Duration: [Number] + [Time Unit] (e.g. 24h, 48 hrs, 3d, 30 min, 1 week)
 	if (!parsedDuration) {
 		const durationRegex = /\b(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|d|day|days|min|mins|minute|minutes|wk|wks|week|weeks)\b/i;
 		const durMatch = input.match(durationRegex);
@@ -266,8 +235,7 @@ export function parseQuickMetadataInput(
 		}
 	}
 
-	// 6. Extract Biomarkers from remaining text:
-	// Check against known list or existing biomarker labels
+	// 4. Extract Biomarkers from remaining text:
 	const knownBiomarkerLabels = context.existingLabels?.biomarker?.map((l) => l.name.toLowerCase()) || [];
 	const words = input.trim().split(/\s+/).filter(Boolean);
 	for (const w of words) {
@@ -280,7 +248,7 @@ export function parseQuickMetadataInput(
 		}
 	}
 
-	// 7. Check for Status (e.g. "Live", "Fixed")
+	// 5. Check for Status (e.g. "Live", "Fixed")
 	if (!parsedStatus) {
 		const statusRegex = /\b(live|fixed)\b/i;
 		const statusMatch = input.match(statusRegex);
@@ -290,18 +258,106 @@ export function parseQuickMetadataInput(
 		}
 	}
 
-	// 8. Remaining entity is Treatment!
-	// Clean up any remaining whitespace, quotation marks, or commas
-	const cleanRemaining = input
-		.replace(/[,;+]/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	// 6. Parse Explicit Global Dose from d: or dose: prefix if present
+	const doseRegex = /(?:^|\s|\b)(\d+(?:\.\d+)?)\s*(µM|uM|μM|nM|pM|mM|M|mg\/ml|mg\/mL|ug\/ml|µg\/mL|ng\/ml|ng\/mL|%|v\/v|w\/v)(?:\s|$|[;,])/i;
+	const dilutionRegex = /(?:^|\s)(?:\/|1:)\s*(\d+(?:\.\d+)?)(?:\s|$)/;
 
-	if (!parsedTreatment && cleanRemaining.length > 0) {
-		parsedTreatment = cleanRemaining;
+	let fallbackDose: ParsedDose | undefined;
+	if (pendingDoseStr) {
+		const dMatch = pendingDoseStr.match(doseRegex);
+		if (dMatch) {
+			const valNum = parseFloat(dMatch[1]);
+			const unit = normalizeDoseUnit(dMatch[2]);
+			fallbackDose = {
+				value: valNum,
+				unit,
+				displayText: `${valNum} ${unit}`,
+				raw: dMatch[0].trim(),
+			};
+		}
+	}
+
+	let fallbackDilution: ParsedDilution | undefined;
+
+	// 7. Parse Treatments & Per-Treatment Doses (separated by comma `,` or ` + `)
+	// Supports: `ABT-737 10uM, Paclitaxel 50nM` or `ABT-737, Paclitaxel` or `t:DrugA, DrugB`
+	const rawTreatmentText = parsedTreatment || input;
+	const rawSegments = rawTreatmentText
+		.split(/,|(?:\s\+\s)/)
+		.map((s) => s.trim())
+		.filter(Boolean);
+
+	const parsedTreatments: ParsedTreatmentItem[] = [];
+
+	for (const seg of rawSegments) {
+		let str = seg;
+
+		// Extract dilution if any (e.g. /3 or 1:3)
+		let segDilution: ParsedDilution | undefined;
+		const dilMatch = str.match(dilutionRegex);
+		if (dilMatch) {
+			const factor = parseFloat(dilMatch[1]);
+			if (!isNaN(factor) && factor > 0) {
+				segDilution = {
+					factor,
+					direction: explicitDirection || context.defaultDirection || "Right",
+					isInferred: !explicitDirection,
+					raw: dilMatch[0].trim(),
+				};
+			}
+			str = str.replace(dilutionRegex, " ");
+		}
+
+		// Extract dose if any (e.g. 10uM, 50nM, 0.1%)
+		let segDose: ParsedDose | undefined;
+		const doseMatch = str.match(doseRegex);
+		if (doseMatch) {
+			const valNum = parseFloat(doseMatch[1]);
+			const unit = normalizeDoseUnit(doseMatch[2]);
+			segDose = {
+				value: valNum,
+				unit,
+				displayText: `${valNum} ${unit}`,
+				raw: doseMatch[0].trim(),
+			};
+			str = str.replace(doseMatch[0], " ");
+		}
+
+		const cleanName = str
+			.replace(/["']/g, "")
+			.replace(/[,;+]/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+
+		if (cleanName.length > 0) {
+			parsedTreatments.push({
+				name: cleanName,
+				dose: segDose,
+				dilution: segDilution,
+			});
+		} else {
+			// No treatment name in this segment: bare dose or dilution
+			if (segDose && !fallbackDose) fallbackDose = segDose;
+			if (segDilution && !fallbackDilution) fallbackDilution = segDilution;
+		}
+	}
+
+	if (parsedTreatments.length === 1) {
+		parsedTreatment = parsedTreatments[0].name;
+		parsedDose = parsedTreatments[0].dose || fallbackDose;
+		parsedDilution = parsedTreatments[0].dilution || fallbackDilution;
+	} else if (parsedTreatments.length > 1) {
+		parsedTreatment = parsedTreatments.map((t) => t.name).join(", ");
+		parsedDose = fallbackDose;
+		parsedDilution = fallbackDilution;
+	} else {
+		parsedTreatment = undefined;
+		parsedDose = fallbackDose;
+		parsedDilution = fallbackDilution;
 	}
 
 	const hasAnyMetadata = !!(
+		parsedTreatments.length > 0 ||
 		parsedTreatment ||
 		parsedDose ||
 		parsedDilution ||
@@ -313,6 +369,7 @@ export function parseQuickMetadataInput(
 
 	return {
 		treatment: parsedTreatment,
+		treatments: parsedTreatments,
 		dose: parsedDose,
 		dilution: parsedDilution,
 		duration: parsedDuration,

@@ -1,8 +1,14 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { toPng } from "html-to-image";
-import { parseLayoutFile } from "./tecanParser";
+import {
+	parseLayoutFile,
+	generateTecanXml,
+	generateTecanCsv,
+} from "./tecanParser";
 import { QuickMetadataPopover } from "./QuickMetadataPopover";
-import type { ParsedQuickCondition } from "./quickMetadataParser";
+import { normalizeDoseUnit, type ParsedQuickCondition } from "./quickMetadataParser";
+import { PasteSpecialModal } from "./PasteSpecialModal";
+import type { PlateClipboard } from "./PasteSpecialModal";
 import {
 	Plus,
 	RotateCcw,
@@ -24,6 +30,9 @@ import {
 	ChevronDown,
 	ChevronUp,
 	FlaskConical,
+	Copy,
+	ClipboardPaste,
+	SlidersHorizontal,
 } from "lucide-react";
 
 /**
@@ -275,12 +284,21 @@ export default function App() {
 	const [selectedWells, setSelectedWells] = useState<Set<string>>(
 		new Set<string>(),
 	);
-	const [isQuickPopoverOpen, setIsQuickPopoverOpen] = useState(true);
+	const [clipboard, setClipboard] = useState<PlateClipboard | null>(null);
+	const [isPasteSpecialOpen, setIsPasteSpecialOpen] = useState(false);
+	const [isQuickPopoverOpen, setIsQuickPopoverOpen] = useState(false);
 	const [hoveredWell, setHoveredWell] = useState<string | null>(null);
 	const [lastClickedWell, setLastClickedWell] = useState<{
 		r: number;
 		c: number;
 	} | null>(null);
+
+	// Auto-close quick popover if selection is cleared
+	useEffect(() => {
+		if (selectedWells.size === 0) {
+			setIsQuickPopoverOpen(false);
+		}
+	}, [selectedWells]);
 
 	// Auto toggle layer preview on when editing that layer, and off when switching away unless manually toggled
 	const prevActiveLayerIdRef = useRef(activeLayerId);
@@ -1249,15 +1267,297 @@ export default function App() {
 		setHistory((prev) => prev.slice(0, -1));
 	};
 
+	const getWellCoords = (wellKey: string) => {
+		const r = wellKey.charCodeAt(0) - 65;
+		const c = parseInt(wellKey.slice(1), 10) - 1;
+		return { r, c };
+	};
+
+	const getWellKey = (r: number, c: number) => {
+		return `${String.fromCharCode(65 + r)}${c + 1}`;
+	};
+
+	const handleCopySelection = () => {
+		const validWells = Array.from(selectedWells).filter(isWellInActiveFormat);
+		if (validWells.length === 0) return;
+
+		let minR = Infinity,
+			maxR = -Infinity;
+		let minC = Infinity,
+			maxC = -Infinity;
+
+		const copiedWellsData: Record<string, any> = {};
+
+		validWells.forEach((w) => {
+			const { r, c } = getWellCoords(w);
+			if (r < minR) minR = r;
+			if (r > maxR) maxR = r;
+			if (c < minC) minC = c;
+			if (c > maxC) maxC = c;
+			if (wells[w]) {
+				copiedWellsData[w] = JSON.parse(JSON.stringify(wells[w]));
+			} else {
+				copiedWellsData[w] = {};
+			}
+		});
+
+		const rowCount = maxR - minR + 1;
+		const colCount = maxC - minC + 1;
+
+		const newClipboard: PlateClipboard = {
+			sourceWells: validWells,
+			geometry: {
+				minR,
+				maxR,
+				minC,
+				maxC,
+				rowCount,
+				colCount,
+			},
+			wellsData: copiedWellsData,
+		};
+
+		setClipboard(newClipboard);
+		setSaveNotification(
+			`Copied ${validWells.length} well${validWells.length > 1 ? "s" : ""} to clipboard`,
+		);
+		setTimeout(() => setSaveNotification(null), 2500);
+	};
+
+	const handlePasteSelection = (options?: {
+		layersToCopy?: string[];
+		mode?: "merge" | "overwrite";
+	}) => {
+		if (!clipboard) {
+			setSaveNotification("Clipboard is empty. Copy wells first.");
+			setTimeout(() => setSaveNotification(null), 2500);
+			return;
+		}
+
+		const validTargets = Array.from(selectedWells).filter(isWellInActiveFormat);
+		if (validTargets.length === 0) {
+			setSaveNotification("Select target wells to paste into.");
+			setTimeout(() => setSaveNotification(null), 2500);
+			return;
+		}
+
+		const layersToCopy = options?.layersToCopy || ["treatment", "dose"];
+		const mode = options?.mode || "overwrite";
+
+		saveToHistory(wells);
+
+		const sGeom = clipboard.geometry;
+		let targetMinR = Infinity,
+			targetMaxR = -Infinity;
+		let targetMinC = Infinity,
+			targetMaxC = -Infinity;
+
+		validTargets.forEach((w) => {
+			const { r, c } = getWellCoords(w);
+			if (r < targetMinR) targetMinR = r;
+			if (r > targetMaxR) targetMaxR = r;
+			if (c < targetMinC) targetMinC = c;
+			if (c > targetMaxC) targetMaxC = c;
+		});
+
+		let targetWellsToUpdate: Array<{ targetKey: string; srcKey: string }> = [];
+
+		// Case 1: Single well target -> Expand to match source geometry
+		if (validTargets.length === 1) {
+			const startR = targetMinR;
+			const startC = targetMinC;
+			for (let dr = 0; dr < sGeom.rowCount; dr++) {
+				for (let dc = 0; dc < sGeom.colCount; dc++) {
+					const srcR = sGeom.minR + dr;
+					const srcC = sGeom.minC + dc;
+					const srcKey = getWellKey(srcR, srcC);
+
+					if (clipboard.sourceWells.includes(srcKey)) {
+						const tgtR = startR + dr;
+						const tgtC = startC + dc;
+						const tgtKey = getWellKey(tgtR, tgtC);
+						if (isWellInActiveFormat(tgtKey)) {
+							targetWellsToUpdate.push({ targetKey: tgtKey, srcKey });
+						}
+					}
+				}
+			}
+		} else {
+			// Case 2: Multi-well target
+			validTargets.forEach((tgtKey) => {
+				const { r: tgtR, c: tgtC } = getWellCoords(tgtKey);
+				const dr = tgtR - targetMinR;
+				const dc = tgtC - targetMinC;
+
+				let srcR: number;
+				let srcC: number;
+
+				if (sGeom.rowCount === 1 && sGeom.colCount === 1) {
+					srcR = sGeom.minR;
+					srcC = sGeom.minC;
+				} else if (sGeom.rowCount === 1) {
+					srcR = sGeom.minR;
+					srcC = sGeom.minC + (dc % sGeom.colCount);
+				} else if (sGeom.colCount === 1) {
+					srcR = sGeom.minR + (dr % sGeom.rowCount);
+					srcC = sGeom.minC;
+				} else {
+					srcR = sGeom.minR + (dr % sGeom.rowCount);
+					srcC = sGeom.minC + (dc % sGeom.colCount);
+				}
+
+				const srcKey = getWellKey(srcR, srcC);
+				targetWellsToUpdate.push({ targetKey: tgtKey, srcKey });
+			});
+		}
+
+		setWells((prev) => {
+			const next = { ...prev };
+			targetWellsToUpdate.forEach(({ targetKey, srcKey }) => {
+				const srcData = clipboard.wellsData[srcKey] || {};
+				const currentWell = next[targetKey] ? { ...next[targetKey] } : {};
+
+				layersToCopy.forEach((layerId) => {
+					if (mode === "overwrite") {
+						if (srcData[layerId] !== undefined) {
+							currentWell[layerId] = JSON.parse(
+								JSON.stringify(srcData[layerId]),
+							);
+						} else {
+							delete currentWell[layerId];
+						}
+					} else {
+						// mode === "merge"
+						if (srcData[layerId] !== undefined) {
+							if (layerId === "treatment") {
+								const curT = Array.isArray(currentWell.treatment)
+									? [...currentWell.treatment]
+									: currentWell.treatment
+										? [currentWell.treatment]
+										: [];
+								const srcT = Array.isArray(srcData.treatment)
+									? srcData.treatment
+									: [srcData.treatment];
+								srcT.forEach((t) => {
+									if (t && !curT.includes(t)) curT.push(t);
+								});
+								currentWell.treatment = curT;
+							} else if (layerId === "biomarker") {
+								const curB = Array.isArray(currentWell.biomarker)
+									? [...currentWell.biomarker]
+									: currentWell.biomarker
+										? [currentWell.biomarker]
+										: [];
+								const srcB = Array.isArray(srcData.biomarker)
+									? srcData.biomarker
+									: [srcData.biomarker];
+								srcB.forEach((b) => {
+									if (b && !curB.includes(b)) curB.push(b);
+								});
+								currentWell.biomarker = curB;
+							} else if (layerId === "dose") {
+								currentWell.dose = JSON.parse(
+									JSON.stringify(srcData.dose),
+								);
+								if (srcData.treatmentDoses) {
+									currentWell.treatmentDoses = {
+										...(currentWell.treatmentDoses || {}),
+										...JSON.parse(
+											JSON.stringify(srcData.treatmentDoses),
+										),
+									};
+								}
+							} else {
+								currentWell[layerId] = JSON.parse(
+									JSON.stringify(srcData[layerId]),
+								);
+							}
+						}
+					}
+				});
+
+				if (mode === "overwrite" && layersToCopy.includes("dose")) {
+					if (srcData.treatmentDoses) {
+						currentWell.treatmentDoses = JSON.parse(
+							JSON.stringify(srcData.treatmentDoses),
+						);
+					} else {
+						delete currentWell.treatmentDoses;
+					}
+				}
+
+				next[targetKey] = currentWell;
+			});
+			return next;
+		});
+
+		if (layersToCopy.includes("dose")) {
+			setVisibleLayers((prev) => ({ ...prev, dose: true }));
+		}
+
+		if (validTargets.length === 1 && targetWellsToUpdate.length > 1) {
+			setSelectedWells(
+				new Set(targetWellsToUpdate.map((t) => t.targetKey)),
+			);
+		}
+
+		setSaveNotification(
+			`Pasted ${layersToCopy.join(" + ")} (${mode}) to ${targetWellsToUpdate.length} wells`,
+		);
+		setTimeout(() => setSaveNotification(null), 2500);
+	};
+
 	useEffect(() => {
-		const handleKeyDown = (e) => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement;
+			const isInputFocused =
+				target &&
+				(target.tagName === "INPUT" ||
+					target.tagName === "TEXTAREA" ||
+					target.isContentEditable);
+
 			if (e.key === "Escape") {
+				if (isPasteSpecialOpen) {
+					setIsPasteSpecialOpen(false);
+					return;
+				}
+				if (isQuickPopoverOpen) {
+					setIsQuickPopoverOpen(false);
+					return;
+				}
 				setSelectedWells(new Set());
+			}
+
+			if (isInputFocused) return;
+
+			// Pressing Enter or / opens Quick Apply when wells are selected
+			if ((e.key === "Enter" || e.key === "/") && selectedWells.size > 0) {
+				e.preventDefault();
+				setIsQuickPopoverOpen(true);
+				return;
+			}
+
+			const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+
+			if (isCmdOrCtrl && e.key.toLowerCase() === "c") {
+				e.preventDefault();
+				handleCopySelection();
+			} else if (isCmdOrCtrl && e.shiftKey && e.key.toLowerCase() === "v") {
+				e.preventDefault();
+				if (clipboard) {
+					setIsPasteSpecialOpen(true);
+				} else {
+					setSaveNotification("Clipboard is empty. Copy wells first.");
+					setTimeout(() => setSaveNotification(null), 2500);
+				}
+			} else if (isCmdOrCtrl && e.key.toLowerCase() === "v") {
+				e.preventDefault();
+				handlePasteSelection();
 			}
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, []);
+	}, [selectedWells, clipboard, wells, isPasteSpecialOpen, isQuickPopoverOpen, plateFormat]);
 
 	useEffect(() => {
 		if (selectedWells.size === 0) return;
@@ -1282,16 +1582,6 @@ export default function App() {
 		}
 	}, [selectedWells, replicateDirection]);
 
-	const getWellCoords = (wellKey) => {
-		const r = wellKey.charCodeAt(0) - 65;
-		const c = parseInt(wellKey.slice(1), 10) - 1;
-		return { r, c };
-	};
-
-	const getWellKey = (r, c) => {
-		return `${String.fromCharCode(65 + r)}${c + 1}`;
-	};
-
 	const getWellsInBoundingBox = (start, end) => {
 		if (!start || !end) return [];
 		const rMin = Math.min(start.r, end.r);
@@ -1315,7 +1605,6 @@ export default function App() {
 	) => {
 		e.preventDefault();
 		setIsDrawing(true);
-		setIsQuickPopoverOpen(true);
 		const startCoord = { r, c };
 		setDragStart(startCoord);
 		setDragCurrent(startCoord);
@@ -1789,7 +2078,6 @@ export default function App() {
 	};
 
 	const selectRow = (rowLabel) => {
-		setIsQuickPopoverOpen(true);
 		setSelectedWells((prev) => {
 			const next = new Set(prev);
 			const targets = [];
@@ -1812,7 +2100,6 @@ export default function App() {
 	};
 
 	const selectCol = (colNum) => {
-		setIsQuickPopoverOpen(true);
 		setSelectedWells((prev) => {
 			const next = new Set(prev);
 			const targets = [];
@@ -1973,10 +2260,14 @@ export default function App() {
 		parsed,
 		mode,
 		effectiveDirection,
+		targetTreatmentId,
+		keepOpen = false,
 	}: {
 		parsed: ParsedQuickCondition;
-		mode: "add" | "replace";
+		mode: "add" | "replace" | "update_treatment_dose";
 		effectiveDirection: "Right" | "Down";
+		targetTreatmentId?: string;
+		keepOpen?: boolean;
 	}) => {
 		if (selectedWells.size === 0) return;
 		saveToHistory(wells);
@@ -1988,128 +2279,122 @@ export default function App() {
 		let updatedLabels: Record<string, any[]> = { ...labels };
 		let nextVisibleLayers = { ...visibleLayers };
 
-		// 1. Treatment
-		let treatmentLabelId: string | undefined;
-		if (parsed.treatment) {
-			const treatmentName = parsed.treatment.trim();
-			const existingTreatment = (updatedLabels.treatment || []).find(
-				(l: any) => l.name.toLowerCase() === treatmentName.toLowerCase(),
+		// Helper to find or create treatment label
+		const getOrCreateTreatmentId = (name: string): string => {
+			const clean = name.trim();
+			const existing = (updatedLabels.treatment || []).find(
+				(l: any) => l.name.toLowerCase() === clean.toLowerCase(),
 			);
-			if (existingTreatment) {
-				treatmentLabelId = existingTreatment.id;
-			} else {
+			if (existing) return existing.id;
+			const colorIndex =
+				(updatedLabels.treatment?.length || 0) % ACCESSIBLE_PALETTE.length;
+			const newId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+			const newLabel = {
+				id: newId,
+				name: clean,
+				color: ACCESSIBLE_PALETTE[colorIndex],
+			};
+			updatedLabels.treatment = [...(updatedLabels.treatment || []), newLabel];
+			return newId;
+		};
+
+		// Helper to find or create dose label for a given value/unit
+		const getOrCreateDoseLabel = (val: number, unit: string, formattedName?: string): string => {
+			const normUnit = normalizeDoseUnit(unit);
+			const displayName = formattedName || formatDoseDisplay(val.toString(), normUnit);
+			let doseLabel = (updatedLabels.dose || []).find(
+				(l: any) =>
+					l.unit === normUnit &&
+					(l.value === val || Math.abs((l.value || 0) - val) < 1e-9),
+			);
+			if (!doseLabel) {
 				const colorIndex =
-					(updatedLabels.treatment?.length || 0) %
-					ACCESSIBLE_PALETTE.length;
-				treatmentLabelId = `t-${Date.now()}`;
-				const newLabel = {
-					id: treatmentLabelId,
-					name: treatmentName,
+					(updatedLabels.dose?.length || 0) % ACCESSIBLE_PALETTE.length;
+				doseLabel = {
+					id: `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+					name: displayName,
 					color: ACCESSIBLE_PALETTE[colorIndex],
+					value: val,
+					unit: normUnit,
 				};
-				updatedLabels.treatment = [
-					...(updatedLabels.treatment || []),
-					newLabel,
-				];
+				updatedLabels.dose = [...(updatedLabels.dose || []), doseLabel];
 			}
-		}
+			return doseLabel.id;
+		};
 
-		// 2. Dose & Dilution
-		const assignedDoseMap: Record<string, string> = {};
-		if (parsed.dose) {
+		// Helper to compute dose assignments for wells in validSelection
+		const computeWellDoseMap = (
+			doseObj?: { value: number; unit: string; displayText: string },
+			dilutionObj?: { factor: number; direction?: "Right" | "Down" }
+		): Record<string, string> => {
+			const map: Record<string, string> = {};
+			if (!doseObj) return map;
 			nextVisibleLayers.dose = true;
-			const unit = parsed.dose.unit || "µM";
+			const unit = doseObj.unit || "µM";
 
-			if (parsed.dilution) {
-				const startVal = parsed.dose.value || 1.0;
-				const factor = parsed.dilution.factor || 3.0;
-				const dir = effectiveDirection || "Right";
+			if (dilutionObj) {
+				const startVal = doseObj.value || 1.0;
+				const factor = dilutionObj.factor || 3.0;
+				const dir = dilutionObj.direction || effectiveDirection || "Right";
 
 				validSelection.forEach((wellKey) => {
 					const coords = getWellCoords(wellKey);
 					let stepIndex = 0;
-
 					if (dir === "Right") {
 						const sameRowWells = validSelection.filter(
 							(k) => getWellCoords(k).r === coords.r,
 						);
-						const minC = Math.min(
-							...sameRowWells.map((k) => getWellCoords(k).c),
-						);
+						const minC = Math.min(...sameRowWells.map((k) => getWellCoords(k).c));
 						stepIndex = Math.max(0, coords.c - minC);
 					} else {
 						const sameColWells = validSelection.filter(
 							(k) => getWellCoords(k).c === coords.c,
 						);
-						const minR = Math.min(
-							...sameColWells.map((k) => getWellCoords(k).r),
-						);
+						const minR = Math.min(...sameColWells.map((k) => getWellCoords(k).r));
 						stepIndex = Math.max(0, coords.r - minR);
 					}
-
 					const stepVal = startVal / Math.pow(factor, stepIndex);
-					const formattedLabelName = formatDoseDisplay(
-						stepVal.toString(),
-						unit,
-					);
-
-					let doseLabel = (updatedLabels.dose || []).find(
-						(l: any) =>
-							l.unit === unit &&
-							(l.value === stepVal ||
-								Math.abs((l.value || 0) - stepVal) < 1e-9),
-					);
-
-					if (!doseLabel) {
-						const colorIndex =
-							(updatedLabels.dose?.length || 0) %
-							ACCESSIBLE_PALETTE.length;
-						doseLabel = {
-							id: `d-${Date.now()}-${stepVal.toFixed(6)}`,
-							name: formattedLabelName,
-							color: ACCESSIBLE_PALETTE[colorIndex],
-							value: stepVal,
-							unit,
-						};
-						updatedLabels.dose = [
-							...(updatedLabels.dose || []),
-							doseLabel,
-						];
-					}
-					assignedDoseMap[wellKey] = doseLabel.id;
+					const labelId = getOrCreateDoseLabel(stepVal, unit);
+					map[wellKey] = labelId;
 				});
 			} else {
-				const val = parsed.dose.value;
-				const formattedLabelName = parsed.dose.displayText;
-				let doseLabel = (updatedLabels.dose || []).find(
-					(l: any) =>
-						l.unit === unit &&
-						(l.value === val ||
-							Math.abs((l.value || 0) - val) < 1e-9),
-				);
-
-				if (!doseLabel) {
-					const colorIndex =
-						(updatedLabels.dose?.length || 0) %
-						ACCESSIBLE_PALETTE.length;
-					doseLabel = {
-						id: `d-${Date.now()}`,
-						name: formattedLabelName,
-						color: ACCESSIBLE_PALETTE[colorIndex],
-						value: val,
-						unit,
-					};
-					updatedLabels.dose = [
-						...(updatedLabels.dose || []),
-						doseLabel,
-					];
-				}
-
+				const labelId = getOrCreateDoseLabel(doseObj.value, unit, doseObj.displayText);
 				validSelection.forEach((wellKey) => {
-					assignedDoseMap[wellKey] = doseLabel.id;
+					map[wellKey] = labelId;
 				});
 			}
-		}
+			return map;
+		};
+
+		// 1. Resolve treatments and their respective dose maps
+		const rawTreatmentsList =
+			parsed.treatments && parsed.treatments.length > 0
+				? parsed.treatments
+				: parsed.treatment
+					? [{ name: parsed.treatment, dose: parsed.dose, dilution: parsed.dilution }]
+					: [];
+
+		const treatmentApplications: Array<{
+			id: string;
+			name: string;
+			doseMap: Record<string, string>;
+		}> = [];
+
+		rawTreatmentsList.forEach((tItem) => {
+			const tId = getOrCreateTreatmentId(tItem.name);
+			const tDoseMap = computeWellDoseMap(
+				tItem.dose || (rawTreatmentsList.length === 1 ? parsed.dose : undefined),
+				tItem.dilution || (rawTreatmentsList.length === 1 ? parsed.dilution : undefined)
+			);
+			treatmentApplications.push({
+				id: tId,
+				name: tItem.name,
+				doseMap: tDoseMap,
+			});
+		});
+
+		const primaryTreatmentId = treatmentApplications[0]?.id;
+		const fallbackGlobalDoseMap = computeWellDoseMap(parsed.dose, parsed.dilution);
 
 		// 3. Duration
 		let durationLabelId: string | undefined;
@@ -2220,34 +2505,207 @@ export default function App() {
 			customLayerLabelMap[layerId] = cLabel.id;
 		});
 
+		const effectiveTargetId =
+			targetTreatmentId ||
+			(mode === "update_treatment_dose" ? primaryTreatmentId : undefined);
+
 		// Apply all extracted layers to wells in validSelection
 		validSelection.forEach((wellKey) => {
 			const existingWell = updatedWells[wellKey] || {};
 			const nextWell = { ...existingWell };
 
-			// Treatment: Sequential combo vs Replace
-			if (treatmentLabelId) {
-				if (mode === "add") {
-					let existingTreatments = nextWell.treatment;
-					if (!Array.isArray(existingTreatments)) {
-						existingTreatments = existingTreatments
-							? [existingTreatments]
-							: [];
+			// Treatment & Dose Application
+			if (mode === "update_treatment_dose" && effectiveTargetId) {
+				let curTreatments = nextWell.treatment;
+				if (!Array.isArray(curTreatments)) {
+					curTreatments = curTreatments ? [curTreatments] : [];
+				}
+				if (!curTreatments.includes(effectiveTargetId)) {
+					nextWell.treatment = [...curTreatments, effectiveTargetId];
+				}
+
+				const appliedDoseId =
+					treatmentApplications.find((t) => t.id === effectiveTargetId)?.doseMap[wellKey] ||
+					fallbackGlobalDoseMap[wellKey];
+
+				if (appliedDoseId) {
+					const nextTD: Record<string, string> = {
+						...(nextWell.treatmentDoses || {}),
+					};
+					// Backfill existing dose if previous single treatment had dose on well.dose
+					if (
+						curTreatments.length === 1 &&
+						curTreatments[0] === effectiveTargetId &&
+						nextWell.dose &&
+						!nextTD[effectiveTargetId]
+					) {
+						nextTD[effectiveTargetId] = nextWell.dose;
 					}
-					if (!existingTreatments.includes(treatmentLabelId)) {
-						nextWell.treatment = [
-							...existingTreatments,
-							treatmentLabelId,
-						];
+					nextTD[effectiveTargetId] = appliedDoseId;
+					nextWell.treatmentDoses = nextTD;
+
+					const activeT = Array.isArray(nextWell.treatment)
+						? nextWell.treatment
+						: [effectiveTargetId];
+					if (activeT.length <= 1) {
+						nextWell.dose = appliedDoseId;
+					} else {
+						const doseParts: string[] = [];
+						activeT.forEach((tId: string) => {
+							const dId = nextTD[tId];
+							if (dId) {
+								const dl = (updatedLabels.dose || []).find(
+									(l: any) => l.id === dId,
+								);
+								if (dl) doseParts.push(dl.name);
+							}
+						});
+						if (doseParts.length > 0) {
+							const combinedName = doseParts.join(" + ");
+							let combinedLabel = (updatedLabels.dose || []).find(
+								(l: any) => l.name === combinedName,
+							);
+							if (!combinedLabel) {
+								const colorIndex =
+									(updatedLabels.dose?.length || 0) %
+									ACCESSIBLE_PALETTE.length;
+								combinedLabel = {
+									id: `d-combo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+									name: combinedName,
+									color: ACCESSIBLE_PALETTE[colorIndex],
+								};
+								updatedLabels.dose = [
+									...(updatedLabels.dose || []),
+									combinedLabel,
+								];
+							}
+							nextWell.dose = combinedLabel.id;
+						} else {
+							nextWell.dose = appliedDoseId;
+						}
+					}
+				}
+			} else if (mode === "add") {
+				let curTreatments = nextWell.treatment;
+				if (!Array.isArray(curTreatments)) {
+					curTreatments = curTreatments ? [curTreatments] : [];
+				}
+				treatmentApplications.forEach((t) => {
+					if (!curTreatments.includes(t.id)) {
+						curTreatments = [...curTreatments, t.id];
+					}
+				});
+				if (treatmentApplications.length > 0) {
+					nextWell.treatment = curTreatments;
+				}
+
+				const nextTD: Record<string, string> = {
+					...(nextWell.treatmentDoses || {}),
+				};
+				treatmentApplications.forEach((t) => {
+					if (t.doseMap[wellKey]) {
+						nextTD[t.id] = t.doseMap[wellKey];
+					}
+				});
+				if (fallbackGlobalDoseMap[wellKey] && curTreatments.length === 1) {
+					nextTD[curTreatments[0]] = fallbackGlobalDoseMap[wellKey];
+				}
+				if (Object.keys(nextTD).length > 0) {
+					nextWell.treatmentDoses = nextTD;
+				}
+
+				const activeT = Array.isArray(nextWell.treatment) ? nextWell.treatment : [];
+				if (activeT.length <= 1) {
+					if (activeT.length === 1 && nextTD[activeT[0]]) {
+						nextWell.dose = nextTD[activeT[0]];
+					} else if (fallbackGlobalDoseMap[wellKey]) {
+						nextWell.dose = fallbackGlobalDoseMap[wellKey];
 					}
 				} else {
-					nextWell.treatment = [treatmentLabelId];
+					const doseParts: string[] = [];
+					activeT.forEach((tId: string) => {
+						const dId = nextTD[tId];
+						if (dId) {
+							const dl = (updatedLabels.dose || []).find((l: any) => l.id === dId);
+							if (dl) doseParts.push(dl.name);
+						}
+					});
+					if (doseParts.length > 0) {
+						const combinedName = doseParts.join(" + ");
+						let combinedLabel = (updatedLabels.dose || []).find(
+							(l: any) => l.name === combinedName,
+						);
+						if (!combinedLabel) {
+							const colorIndex =
+								(updatedLabels.dose?.length || 0) % ACCESSIBLE_PALETTE.length;
+							combinedLabel = {
+								id: `d-combo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+								name: combinedName,
+								color: ACCESSIBLE_PALETTE[colorIndex],
+							};
+							updatedLabels.dose = [...(updatedLabels.dose || []), combinedLabel];
+						}
+						nextWell.dose = combinedLabel.id;
+					} else if (fallbackGlobalDoseMap[wellKey]) {
+						nextWell.dose = fallbackGlobalDoseMap[wellKey];
+					}
 				}
-			}
+			} else {
+				// mode === "replace"
+				if (treatmentApplications.length > 0) {
+					nextWell.treatment = treatmentApplications.map((t) => t.id);
+				}
+				const nextTD: Record<string, string> = {};
+				treatmentApplications.forEach((t) => {
+					if (t.doseMap[wellKey]) {
+						nextTD[t.id] = t.doseMap[wellKey];
+					}
+				});
+				if (fallbackGlobalDoseMap[wellKey] && treatmentApplications.length === 1) {
+					nextTD[treatmentApplications[0].id] = fallbackGlobalDoseMap[wellKey];
+				}
+				if (Object.keys(nextTD).length > 0) {
+					nextWell.treatmentDoses = nextTD;
+				} else if (treatmentApplications.length > 0) {
+					delete nextWell.treatmentDoses;
+				}
 
-			// Dose
-			if (assignedDoseMap[wellKey]) {
-				nextWell.dose = assignedDoseMap[wellKey];
+				const activeT = Array.isArray(nextWell.treatment) ? nextWell.treatment : [];
+				if (activeT.length <= 1) {
+					if (activeT.length === 1 && nextTD[activeT[0]]) {
+						nextWell.dose = nextTD[activeT[0]];
+					} else if (fallbackGlobalDoseMap[wellKey]) {
+						nextWell.dose = fallbackGlobalDoseMap[wellKey];
+					}
+				} else {
+					const doseParts: string[] = [];
+					activeT.forEach((tId: string) => {
+						const dId = nextTD[tId];
+						if (dId) {
+							const dl = (updatedLabels.dose || []).find((l: any) => l.id === dId);
+							if (dl) doseParts.push(dl.name);
+						}
+					});
+					if (doseParts.length > 0) {
+						const combinedName = doseParts.join(" + ");
+						let combinedLabel = (updatedLabels.dose || []).find(
+							(l: any) => l.name === combinedName,
+						);
+						if (!combinedLabel) {
+							const colorIndex =
+								(updatedLabels.dose?.length || 0) % ACCESSIBLE_PALETTE.length;
+							combinedLabel = {
+								id: `d-combo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+								name: combinedName,
+								color: ACCESSIBLE_PALETTE[colorIndex],
+							};
+							updatedLabels.dose = [...(updatedLabels.dose || []), combinedLabel];
+						}
+						nextWell.dose = combinedLabel.id;
+					} else if (fallbackGlobalDoseMap[wellKey]) {
+						nextWell.dose = fallbackGlobalDoseMap[wellKey];
+					}
+				}
 			}
 
 			// Duration
@@ -2292,7 +2750,136 @@ export default function App() {
 		setVisibleLayers(nextVisibleLayers);
 		setSaveNotification(`Applied condition to ${validSelection.length} wells`);
 		setTimeout(() => setSaveNotification(null), 3000);
-		setIsQuickPopoverOpen(false);
+		if (!keepOpen) {
+			setIsQuickPopoverOpen(false);
+		}
+	};
+
+	const handleRemoveExistingLayerFromSelection = (
+		layerId: string,
+		itemValueId?: string,
+		targetTreatmentId?: string,
+	) => {
+		if (selectedWells.size === 0) return;
+		saveToHistory(wells);
+
+		const validSelection = Array.from(selectedWells).filter(
+			isWellInActiveFormat,
+		);
+		if (validSelection.length === 0) return;
+
+		let updatedWells: Record<string, any> = { ...wells };
+		validSelection.forEach((wellKey) => {
+			const currentWell = { ...(updatedWells[wellKey] || {}) };
+
+			if (layerId === "treatment_dose" && targetTreatmentId) {
+				if (currentWell.treatmentDoses) {
+					const nextTD = { ...currentWell.treatmentDoses };
+					delete nextTD[targetTreatmentId];
+					currentWell.treatmentDoses = nextTD;
+				}
+				// Recompute dose for well
+				const curTreatments = Array.isArray(currentWell.treatment)
+					? currentWell.treatment
+					: currentWell.treatment
+						? [currentWell.treatment]
+						: [];
+				const doseParts: string[] = [];
+				curTreatments.forEach((tId: string) => {
+					const dId = currentWell.treatmentDoses?.[tId];
+					if (dId) {
+						const dl = (labels.dose || []).find((l: any) => l.id === dId);
+						if (dl) doseParts.push(dl.name);
+					}
+				});
+				if (doseParts.length > 0) {
+					const combinedName = doseParts.join(" + ");
+					const dl = (labels.dose || []).find(
+						(l: any) => l.name === combinedName,
+					);
+					if (dl) currentWell.dose = dl.id;
+				} else {
+					delete currentWell.dose;
+				}
+			} else if (layerId === "treatment") {
+				if (itemValueId) {
+					let treat = currentWell.treatment;
+					if (Array.isArray(treat)) {
+						currentWell.treatment = treat.filter(
+							(id: string) => id !== itemValueId,
+						);
+					} else if (treat === itemValueId) {
+						currentWell.treatment = [];
+					}
+					if (currentWell.treatmentDoses?.[itemValueId]) {
+						const nextTD = { ...currentWell.treatmentDoses };
+						delete nextTD[itemValueId];
+						currentWell.treatmentDoses = nextTD;
+					}
+					// Recompute dose
+					const remainingTreatments = Array.isArray(currentWell.treatment)
+						? currentWell.treatment
+						: [];
+					if (remainingTreatments.length === 0) {
+						delete currentWell.dose;
+					} else {
+						const doseParts: string[] = [];
+						remainingTreatments.forEach((tId: string) => {
+							const dId = currentWell.treatmentDoses?.[tId];
+							if (dId) {
+								const dl = (labels.dose || []).find(
+									(l: any) => l.id === dId,
+								);
+								if (dl) doseParts.push(dl.name);
+							}
+						});
+						if (doseParts.length > 0) {
+							const combinedName = doseParts.join(" + ");
+							const dl = (labels.dose || []).find(
+								(l: any) => l.name === combinedName,
+							);
+							if (dl) currentWell.dose = dl.id;
+						} else {
+							delete currentWell.dose;
+						}
+					}
+				} else {
+					currentWell.treatment = [];
+					delete currentWell.treatmentDoses;
+					delete currentWell.dose;
+				}
+			} else if (layerId === "dose") {
+				delete currentWell.dose;
+				delete currentWell.treatmentDoses;
+			} else if (layerId === "biomarker") {
+				if (itemValueId) {
+					let bio = currentWell.biomarker;
+					if (Array.isArray(bio)) {
+						currentWell.biomarker = bio.filter(
+							(id: string) => id !== itemValueId,
+						);
+					} else if (bio === itemValueId) {
+						currentWell.biomarker = [];
+					}
+				} else {
+					currentWell.biomarker = [];
+				}
+			} else {
+				delete currentWell[layerId];
+			}
+
+			updatedWells[wellKey] = currentWell;
+		});
+
+		setWells(updatedWells);
+		const targetLayerName =
+			layerId === "treatment_dose"
+				? "treatment dose"
+				: layers.find((l) => l.id === layerId)?.name || layerId;
+		setSaveNotification(
+			`Removed ${targetLayerName} from ${validSelection.length} wells`,
+		);
+		setTimeout(() => setSaveNotification(null), 2500);
 	};
 
 	const activeLabelsList = labels[activeLayerId] || [];
@@ -2451,6 +3038,32 @@ export default function App() {
 		const link = document.createElement("a");
 		link.href = url;
 		link.download = `microplate_${plateFormat}_well_hts_layout_${new Date().toISOString().split("T")[0]}.json`;
+		link.click();
+		URL.revokeObjectURL(url);
+	};
+
+	const handleExportTecanXml = () => {
+		const xmlContent = generateTecanXml(plateFormat, wells, labels, 100);
+		const blob = new Blob([xmlContent], {
+			type: "application/xml;charset=utf-8;",
+		});
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = `tecan_d300e_${plateFormat}_protocol_${new Date().toISOString().split("T")[0]}.xml`;
+		link.click();
+		URL.revokeObjectURL(url);
+	};
+
+	const handleExportTecanCsv = () => {
+		const csvContent = generateTecanCsv(plateFormat, wells, labels, 100);
+		const blob = new Blob([csvContent], {
+			type: "text/csv;charset=utf-8;",
+		});
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = `tecan_d300e_${plateFormat}_dispense_${new Date().toISOString().split("T")[0]}.csv`;
 		link.click();
 		URL.revokeObjectURL(url);
 	};
@@ -2673,17 +3286,59 @@ export default function App() {
 							{/* Action Buttons matching image_9deb29.jpg */}
 							<div className="flex items-center gap-2">
 								<button
-									onClick={() => setIsQuickPopoverOpen(true)}
+									onClick={() => setIsQuickPopoverOpen((prev) => !prev)}
 									disabled={selectedWells.size === 0}
 									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-5 py-2 ${
 										selectedWells.size > 0
 											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
 											: "bg-slate-100 text-slate-400 cursor-not-allowed"
 									}`}
-									title="Quickly apply condition to selection"
+									title="Quickly apply or edit condition on selection (Press Enter or click)"
 								>
 									<Sparkles className="h-4 w-4" />
 									Quick Apply
+								</button>
+
+								<button
+									onClick={handleCopySelection}
+									disabled={selectedWells.size === 0}
+									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-4 py-2 ${
+										selectedWells.size > 0
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											: "bg-slate-100 text-slate-400 cursor-not-allowed"
+									}`}
+									title="Copy selected wells (Cmd/Ctrl+C)"
+								>
+									<Copy className="h-4 w-4" />
+									Copy
+								</button>
+
+								<button
+									onClick={() => handlePasteSelection()}
+									disabled={!clipboard || selectedWells.size === 0}
+									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-4 py-2 ${
+										clipboard && selectedWells.size > 0
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											: "bg-slate-100 text-slate-400 cursor-not-allowed"
+									}`}
+									title="Paste Treatment + Dose (Cmd/Ctrl+V)"
+								>
+									<ClipboardPaste className="h-4 w-4" />
+									Paste
+								</button>
+
+								<button
+									onClick={() => setIsPasteSpecialOpen(true)}
+									disabled={!clipboard || selectedWells.size === 0}
+									className={`flex items-center gap-2 text-sm rounded-full font-medium transition-all px-4 py-2 ${
+										clipboard && selectedWells.size > 0
+											? "bg-[#2E59A7] hover:bg-[#1E3F78] text-white cursor-pointer shadow-sm"
+											: "bg-slate-100 text-slate-400 cursor-not-allowed"
+									}`}
+									title="Paste Special: Choose metadata layers & mode (Cmd/Ctrl+Shift+V)"
+								>
+									<SlidersHorizontal className="h-4 w-4" />
+									Paste Special...
 								</button>
 
 								<button
@@ -2747,6 +3402,7 @@ export default function App() {
 										layers={layers}
 										labels={labels}
 										onApply={handleApplyQuickMetadata}
+										onRemoveExistingLayer={handleRemoveExistingLayerFromSelection}
 										onClose={() => setIsQuickPopoverOpen(false)}
 									/>
 								</div>
@@ -4276,32 +4932,74 @@ export default function App() {
 						</div>
 
 						{/* Modal Footer Buttons */}
-						<div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3 bg-slate-50/50">
-							<button
-								onClick={downloadSnapshot}
-								className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white font-medium px-5 py-2.5 rounded-full transition-all cursor-pointer"
-							>
-								<Download className="h-4 w-4 text-white" />
-								Download Image Snapshot (PNG)
-							</button>
+						<div className="px-6 py-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
+							<div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+								<span>Format:</span>
+								<span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-[#2E59A7] font-semibold border border-blue-200 shadow-2xs">
+									Tecan D300e Compatible
+								</span>
+							</div>
 
-							<button
-								onClick={handleExportData}
-								className="flex items-center gap-2 text-sm bg-[#2E59A7] hover:bg-[#1E3F78] text-white font-medium px-5 py-2.5 rounded-full transition-all cursor-pointer"
-							>
-								<FileText className="h-4 w-4 text-white" />
-								Download JSON Layout
-							</button>
+							<div className="flex flex-wrap items-center gap-2.5 ml-auto">
+								<button
+									onClick={handleExportTecanXml}
+									className="flex items-center gap-1.5 text-xs bg-[#2E59A7] hover:bg-[#1E3F78] text-white font-semibold px-4 py-2 rounded-full transition-all cursor-pointer shadow-xs"
+									title="Download official XML Spreadsheet protocol compatible with Tecan D300e software"
+								>
+									<FileText className="h-3.5 w-3.5 text-white" />
+									Tecan D300e XML Protocol
+								</button>
 
-							<button
-								onClick={() => setIsExportModalOpen(false)}
-								className="text-sm bg-white border border-[#2E59A7] hover:bg-slate-50 text-[#2E59A7] font-medium px-5 py-2.5 rounded-full transition-all cursor-pointer"
-							>
-								Close
-							</button>
+								<button
+									onClick={handleExportTecanCsv}
+									className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-900 text-white font-semibold px-4 py-2 rounded-full transition-all cursor-pointer shadow-xs"
+									title="Download CSV dispense list compatible with Tecan D300e"
+								>
+									<FileText className="h-3.5 w-3.5 text-white" />
+									Tecan D300e CSV
+								</button>
+
+								<button
+									onClick={handleExportData}
+									className="flex items-center gap-1.5 text-xs bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold px-4 py-2 rounded-full transition-all cursor-pointer"
+									title="Download native WellMap JSON layout"
+								>
+									<FileText className="h-3.5 w-3.5 text-slate-500" />
+									JSON Layout
+								</button>
+
+								<button
+									onClick={downloadSnapshot}
+									className="flex items-center gap-1.5 text-xs bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold px-4 py-2 rounded-full transition-all cursor-pointer"
+								>
+									<Download className="h-3.5 w-3.5 text-slate-500" />
+									Image (PNG)
+								</button>
+
+								<button
+									onClick={() => setIsExportModalOpen(false)}
+									className="text-xs bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 font-medium px-4 py-2 rounded-full transition-all cursor-pointer ml-1"
+								>
+									Close
+								</button>
+							</div>
 						</div>
 					</div>
 				</div>
+			)}
+
+			{isPasteSpecialOpen && (
+				<PasteSpecialModal
+					isOpen={isPasteSpecialOpen}
+					onClose={() => setIsPasteSpecialOpen(false)}
+					clipboard={clipboard}
+					selectedWellsCount={selectedWells.size}
+					layers={layers}
+					onPaste={(options) => {
+						handlePasteSelection(options);
+						setIsPasteSpecialOpen(false);
+					}}
+				/>
 			)}
 		</div>
 	);

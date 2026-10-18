@@ -872,3 +872,319 @@ export function parseLayoutFile(
 		"Invalid layout file format. Please upload a valid exported WellMap layout JSON file or a Tecan D300 / digital dispenser XML file.",
 	);
 }
+
+/**
+ * Generates an official Tecan D300e / HP D300 XML Spreadsheet 2003 protocol file.
+ * Compatible with Tecan D300e software import.
+ */
+export function generateTecanXml(
+	plateFormat: string,
+	wells: Record<string, any>,
+	labels: Record<string, any[]>,
+	additionalVolumeUl = 100,
+): string {
+	const is384 = plateFormat === "384";
+	const rowCount = is384 ? 16 : 8;
+	const colCount = is384 ? 24 : 12;
+	const plateType = is384 ? "384 well" : "96 well";
+
+	const treatmentLabels = labels.treatment || [];
+	const doseLabels = labels.dose || [];
+	const usedFluidNames = new Set<string>();
+
+	const sortedWellKeys = Object.keys(wells).sort((a, b) => {
+		const rA = a.charCodeAt(0);
+		const rB = b.charCodeAt(0);
+		if (rA !== rB) return rA - rB;
+		const cA = parseInt(a.slice(1), 10);
+		const cB = parseInt(b.slice(1), 10);
+		return cA - cB;
+	});
+
+	interface ExportDispense {
+		wellKey: string;
+		paddedWell: string;
+		row: number;
+		col: number;
+		fluidName: string;
+		conc: number;
+		unit: string;
+		volumeNl: number;
+	}
+
+	const dispenses: ExportDispense[] = [];
+
+	sortedWellKeys.forEach((wellKey) => {
+		const well = wells[wellKey];
+		if (!well) return;
+		let tIds = well.treatment;
+		if (!tIds) return;
+		if (!Array.isArray(tIds)) tIds = [tIds];
+		if (tIds.length === 0) return;
+
+		const rowChar = wellKey.charAt(0).toUpperCase();
+		const rowNum = rowChar.charCodeAt(0) - 64;
+		const colNum = parseInt(wellKey.slice(1), 10);
+		const paddedWell = `${rowChar}${colNum < 10 ? "0" + colNum : colNum}`;
+
+		tIds.forEach((tId: string) => {
+			const tLabel = treatmentLabels.find((l: any) => l.id === tId);
+			const fluidName = tLabel ? tLabel.name : tId;
+			usedFluidNames.add(fluidName);
+
+			let doseId: string | undefined = well.treatmentDoses?.[tId];
+			if (!doseId && tIds.length === 1) {
+				doseId = well.dose;
+			}
+
+			let conc = 0;
+			let unit = "µM";
+
+			if (doseId) {
+				const dLabel = doseLabels.find((l: any) => l.id === doseId);
+				if (dLabel) {
+					unit = dLabel.unit || "µM";
+					if (dLabel.value !== undefined && !isNaN(dLabel.value)) {
+						conc = dLabel.value;
+					} else {
+						const parsed = parseFloat(dLabel.name);
+						if (!isNaN(parsed)) conc = parsed;
+					}
+				}
+			}
+
+			// Nominal µM stock = 10,000 µM (10 mM)
+			let stockInNormUnit = 10000;
+			const uLower = unit.toLowerCase();
+			if (uLower === "nm") stockInNormUnit = 10000000;
+			else if (uLower === "mm") stockInNormUnit = 10;
+			else if (uLower === "pm") stockInNormUnit = 10000000000;
+			else if (uLower === "%") stockInNormUnit = 100;
+
+			const volumeNl =
+				conc > 0
+					? Number(((conc / stockInNormUnit) * additionalVolumeUl * 1000).toFixed(3))
+					: 0;
+
+			dispenses.push({
+				wellKey,
+				paddedWell,
+				row: rowNum,
+				col: colNum,
+				fluidName,
+				conc,
+				unit,
+				volumeNl,
+			});
+		});
+	});
+
+	const fluidList = Array.from(usedFluidNames);
+
+	const escapeXml = (str: string) =>
+		String(str || "")
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;")
+			.replace(/'/g, "&apos;");
+
+	let xml = `<?xml version="1.0" encoding="utf-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40" xmlns="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Default" ss:Name="Normal">
+      <Alignment ss:Vertical="Bottom"/>
+      <Borders/>
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Color="#000000"/>
+      <Interior/>
+      <NumberFormat/>
+      <Protection/>
+    </Style>
+    <Style ss:ID="sCenter">
+      <Alignment ss:Horizontal="Center" ss:Vertical="Bottom"/>
+    </Style>
+    <Style ss:ID="sHeader">
+      <Alignment ss:Horizontal="Center" ss:Vertical="Bottom" ss:WrapText="1"/>
+      <Font ss:Color="#FFFFFF" ss:Bold="1"/>
+      <Interior ss:Color="#000000" ss:Pattern="Solid"/>
+    </Style>
+    <Style ss:ID="sHeaderLeft">
+      <Alignment ss:Horizontal="Left" ss:Vertical="Bottom"/>
+      <Font ss:Color="#FFFFFF" ss:Bold="1"/>
+      <Interior ss:Color="#000000" ss:Pattern="Solid"/>
+    </Style>
+  </Styles>
+  <Worksheet ss:Name="Plates">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Plate</Data></Cell>
+        <Cell ss:StyleID="sHeaderLeft"><Data ss:Type="String">Plate name</Data></Cell>
+        <Cell ss:StyleID="sHeaderLeft"><Data ss:Type="String">Plate ID</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Type</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Rows</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Columns</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Additional volume (µL)</Data></Cell>
+      </Row>
+      <Row>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">1</Data></Cell>
+        <Cell><Data ss:Type="String">Plate 1</Data></Cell>
+        <Cell><Data ss:Type="String"></Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="String">${escapeXml(plateType)}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${rowCount}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${colCount}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${additionalVolumeUl}</Data></Cell>
+      </Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Fluids">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Fluid</Data></Cell>
+        <Cell ss:StyleID="sHeaderLeft"><Data ss:Type="String">Fluid name</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Stock concentration</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Stock concentration units</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Class</Data></Cell>
+      </Row>`;
+
+	fluidList.forEach((fluidName, idx) => {
+		const isDmso = /dmso|vehicle/i.test(fluidName);
+		xml += `
+      <Row>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${idx + 1}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(fluidName)}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${isDmso ? 100 : 10}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="String">${isDmso ? "%" : "mM"}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="String">DMSO</Data></Cell>
+      </Row>`;
+	});
+
+	xml += `
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Tabular detail">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="sHeaderLeft"><Data ss:Type="String">Plate ID</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Plate</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Dispensed well</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Dispensed row</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Dispensed col</Data></Cell>
+        <Cell ss:StyleID="sHeaderLeft"><Data ss:Type="String">Fluid name</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Dispensed concentration</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Units</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Dispensed volume</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Units</Data></Cell>
+        <Cell ss:StyleID="sHeader"><Data ss:Type="String">Total well volume</Data></Cell>
+      </Row>`;
+
+	dispenses.forEach((d) => {
+		const totalWellVolNl = additionalVolumeUl * 1000 + d.volumeNl;
+		xml += `
+      <Row>
+        <Cell><Data ss:Type="String"></Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">1</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="String">${escapeXml(d.paddedWell)}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${d.row}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${d.col}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(d.fluidName)}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${d.conc}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="String">${escapeXml(d.unit)}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${d.volumeNl}</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="String">nL</Data></Cell>
+        <Cell ss:StyleID="sCenter"><Data ss:Type="Number">${totalWellVolNl}</Data></Cell>
+      </Row>`;
+	});
+
+	xml += `
+    </Table>
+  </Worksheet>
+</Workbook>`;
+
+	return xml;
+}
+
+/**
+ * Generates a standard Tecan D300e CSV dispense protocol.
+ */
+export function generateTecanCsv(
+	plateFormat: string,
+	wells: Record<string, any>,
+	labels: Record<string, any[]>,
+	additionalVolumeUl = 100,
+): string {
+	const treatmentLabels = labels.treatment || [];
+	const doseLabels = labels.dose || [];
+
+	const sortedWellKeys = Object.keys(wells).sort((a, b) => {
+		const rA = a.charCodeAt(0);
+		const rB = b.charCodeAt(0);
+		if (rA !== rB) return rA - rB;
+		const cA = parseInt(a.slice(1), 10);
+		const cB = parseInt(b.slice(1), 10);
+		return cA - cB;
+	});
+
+	const rows: string[] = [
+		"Plate,Well,Row,Column,Fluid name,Dispensed concentration,Concentration units,Dispensed volume,Volume units,Total well volume [µL]",
+	];
+
+	sortedWellKeys.forEach((wellKey) => {
+		const well = wells[wellKey];
+		if (!well) return;
+		let tIds = well.treatment;
+		if (!tIds) return;
+		if (!Array.isArray(tIds)) tIds = [tIds];
+		if (tIds.length === 0) return;
+
+		const rowChar = wellKey.charAt(0).toUpperCase();
+		const rowNum = rowChar.charCodeAt(0) - 64;
+		const colNum = parseInt(wellKey.slice(1), 10);
+		const paddedWell = `${rowChar}${colNum < 10 ? "0" + colNum : colNum}`;
+
+		tIds.forEach((tId: string) => {
+			const tLabel = treatmentLabels.find((l: any) => l.id === tId);
+			const fluidName = tLabel ? tLabel.name : tId;
+
+			let doseId: string | undefined = well.treatmentDoses?.[tId];
+			if (!doseId && tIds.length === 1) {
+				doseId = well.dose;
+			}
+
+			let conc = 0;
+			let unit = "µM";
+
+			if (doseId) {
+				const dLabel = doseLabels.find((l: any) => l.id === doseId);
+				if (dLabel) {
+					unit = dLabel.unit || "µM";
+					if (dLabel.value !== undefined && !isNaN(dLabel.value)) {
+						conc = dLabel.value;
+					} else {
+						const parsed = parseFloat(dLabel.name);
+						if (!isNaN(parsed)) conc = parsed;
+					}
+				}
+			}
+
+			let stockInNormUnit = 10000;
+			const uLower = unit.toLowerCase();
+			if (uLower === "nm") stockInNormUnit = 10000000;
+			else if (uLower === "mm") stockInNormUnit = 10;
+			else if (uLower === "pm") stockInNormUnit = 10000000000;
+			else if (uLower === "%") stockInNormUnit = 100;
+
+			const volumeNl =
+				conc > 0
+					? Number(((conc / stockInNormUnit) * additionalVolumeUl * 1000).toFixed(3))
+					: 0;
+
+			const cleanFluid = fluidName.includes(",") ? `"${fluidName}"` : fluidName;
+			rows.push(
+				`1,${paddedWell},${rowNum},${colNum},${cleanFluid},${conc},${unit},${volumeNl},nL,${additionalVolumeUl}`,
+			);
+		});
+	});
+
+	return rows.join("\n");
+}
